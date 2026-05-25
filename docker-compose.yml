@@ -144,7 +144,7 @@ services:
   # 7. THE BRAIN (Laravel 12 + Octane)
   backend:
     build:
-      context: ./backend
+      context: ../hive-os-backend
       dockerfile: Dockerfile
     container_name: hive-backend
     restart: unless-stopped
@@ -228,7 +228,7 @@ services:
   # 8. THE WORKER (Background Jobs)
   queue:
     build:
-      context: ./backend
+      context: ../hive-os-backend
       dockerfile: Dockerfile
     container_name: hive-queue
     restart: unless-stopped
@@ -286,7 +286,7 @@ services:
   # 9. THE FACE (Next.js 16)
   frontend:
     build:
-      context: ./frontend
+      context: ../hive-os-frontend
       dockerfile: Dockerfile
     container_name: hive-frontend
     restart: unless-stopped
@@ -329,7 +329,7 @@ services:
   # 🚀 11. WEBSOCKET ENGINE (Reverb)
   reverb:
     build:
-      context: ./backend
+      context: ../hive-os-backend
       dockerfile: Dockerfile
     container_name: hive-reverb
     restart: unless-stopped

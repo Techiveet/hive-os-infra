@@ -515,6 +515,7 @@ fi
 DEPLOY_STEP="Caching Laravel config"
 compose exec -T backend php artisan config:cache
 DEPLOY_STEP="Caching Laravel views"
+compose exec -T backend mkdir -p /var/www/html/Modules/Subscription/app/resources/views || true
 compose exec -T backend php artisan view:cache
 
 if [ "$(get_env_value SCOUT_DRIVER)" = "meilisearch" ]; then
