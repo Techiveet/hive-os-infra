@@ -34,9 +34,13 @@ jobs:
             ./ ${{ secrets.VPS_SSH_USER }}@${{ secrets.VPS_HOST_IP }}:/var/www/hive/
 
       - name: Login VPS to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.VPS_GHCR_TOKEN }}
+          GHCR_USER: ${{ secrets.VPS_GHCR_USER }}
         run: |
-          ssh ${{ secrets.VPS_SSH_USER }}@${{ secrets.VPS_HOST_IP }} \
-            "echo '${{ secrets.VPS_GHCR_TOKEN }}' | docker login ghcr.io -u '${{ secrets.VPS_GHCR_USER }}' --password-stdin"
+          # Write credentials to a temp file, scp it, login, then clean up
+          echo "${GHCR_TOKEN}" | ssh ${{ secrets.VPS_SSH_USER }}@${{ secrets.VPS_HOST_IP }} \
+            "docker login ghcr.io --username ${GHCR_USER} --password-stdin"
 
       - name: Run deploy script on VPS
         run: |
