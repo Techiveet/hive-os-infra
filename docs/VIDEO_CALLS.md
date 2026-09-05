@@ -26,8 +26,8 @@ Do not simply expose the development secrets.
 Open a conversation or sent mail, select Video call, then Join call. Other
 members open the same item to join; the button detects active rooms every
 15 seconds while the page is visible. This version does not send ringing
-notifications or external email invitations. Camera/microphone start off;
-enable them explicitly. Screen sharing uses the browser picker. Escape,
+notifications or external email invitations. Camera/microphone default to off; choose join preferences before connecting or
+enable them from the call controls afterward. Screen sharing uses the browser picker. Escape,
 Close, Leave call and navigation disconnect and stop local tracks.
 Message end-to-end encryption does not apply to calls; media uses encrypted transport.
 
@@ -95,7 +95,7 @@ the initial Connected status.
 Embedded TURN listens on UDP 17882 on the selected private host adapter.
 LiveKit supplies short-lived participant credentials; no anonymous relay is
 configured. Restricted relay peers are limited to the media adapter's /32.
-This provides an ICE fallback for browsers that can reach the private adapter. Firefox deployments that filter private candidates require a browser-reachable TLS/public TURN endpoint.
+This provides an ICE fallback for browsers that can reach the private adapter. A Windows STUN binding probe received a response from the private TURN listener; the remaining Firefox failure is not proof that a public relay is required.
 Run setup-video.py again when changing the media adapter address, then recreate
 video-media so its published ports and advertised address remain aligned.
 
@@ -115,4 +115,4 @@ tabs using the same Hive account also remained connected together through
 distinct per-browser media identities. Temporary browser instrumentation and
 expiring test token files were removed. The equivalent WSL native client could
 not connect; this local configuration is verified for clients on the Windows
-host. The headless Firefox probe still reports "could not establish pc connection" when private UDP/TURN is the only relay; this requires a browser-reachable TLS/public TURN endpoint in deployments where Firefox filters private candidates. Physical-device publishing remains a separate acceptance check.
+host. The headless Firefox probe still reports "could not establish pc connection". Its root cause remains unconfirmed; do not treat these Chromium results as Firefox acceptance. Physical-device publishing remains a separate acceptance check.
