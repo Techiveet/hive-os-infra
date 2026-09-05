@@ -63,6 +63,7 @@ rtc:
   node_ip: 127.0.0.1
   use_external_ip: false
   tcp_port: 17881
+  allow_tcp_fallback: true
   port_range_start: 50100
   port_range_end: 50120
 """)
