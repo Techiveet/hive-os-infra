@@ -690,7 +690,7 @@ services:
   video-backend:
     image: hive-video-backend:latest
     build:
-      context: ../../zoom-clone/backend
+      context: ./video-backend
     container_name: hive-video-backend
     restart: unless-stopped
     env_file: .video/backend.env
@@ -714,8 +714,8 @@ services:
       - "127.0.0.1:17880:7880"
       - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17881:17881"
       - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17882:17882/udp"
+      - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17883:17883/udp"
       - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:50200-50240:50200-50240/udp"
-      - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:50100-50120:50100-50120/udp"
     volumes:
       - ./.video/livekit.yaml:/etc/livekit.yaml:ro
     networks: [hive-network]

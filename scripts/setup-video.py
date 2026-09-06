@@ -63,9 +63,8 @@ rtc:
   node_ip: 127.0.0.1
   use_external_ip: false
   tcp_port: 17881
+  udp_port: 17883
   allow_tcp_fallback: true
-  port_range_start: 50100
-  port_range_end: 50120
 """)
 if args.media_ip:
     config, count = re.subn(r"(?m)^  node_ip:.*$", "  node_ip: " + args.media_ip, media.read_text())
@@ -80,6 +79,14 @@ if args.media_ip:
 # Embedded TURN uses per-participant credentials issued by LiveKit. Limit relay
 # access to the configured media address, including on private Docker networks.
 media_config = media.read_text()
+# Migrate the original narrow per-track UDP range to LiveKit's UDP mux. A
+# single published UDP port supports conference growth without asking Docker
+# Desktop to bind thousands of host ports.
+rtc_config = media_config.split("\nturn:", 1)[0]
+if "  udp_port: 17883\n" not in rtc_config:
+    media_config = media_config.replace("  tcp_port: 17881\n", "  tcp_port: 17881\n  udp_port: 17883\n", 1)
+media_config = re.sub(r"(?m)^  port_range_start: 50100\n  port_range_end: 50120\n", "", media_config, count=1)
+media_config = media_config.replace("  relay_range_end: 50399\n", "  relay_range_end: 50240\n", 1)
 media_ip_match = re.search(r"(?m)^  node_ip:\s*(\S+)\s*$", media_config)
 if not media_ip_match:
     raise SystemExit("Missing rtc.node_ip; configure a media address before enabling TURN.")

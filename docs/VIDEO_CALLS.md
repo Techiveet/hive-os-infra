@@ -1,6 +1,8 @@
 # Hive video calls
 
-Hive chat and sent mail now use the backend from /home/mike/projects/zoom-clone.
+Hive chat and sent mail use the Zoom-clone backend source vendored in
+`hive-os-infra/video-backend`, so the container build is reproducible from the
+infrastructure repository alone.
 Hive authorizes the current conversation/mail membership before making a signed
 server-to-server request. The clone issues five-minute LiveKit credentials
 restricted to a tenant-scoped Hive room. Clone meeting rooms remain separate.
@@ -16,7 +18,7 @@ docker exec hive-backend php artisan octane:reload --no-ansi
 
 Private settings are in .video/backend.env, .video/livekit.yaml and the Hive
 backend .env. Do not commit these files. The media endpoint is
-ws://127.0.0.1:17880; TCP media uses 17881, UDP media uses 50100–50120,
+ws://127.0.0.1:17880; TCP media uses 17881, multiplexed UDP media uses 17883,
 and TURN uses 17882 plus relay ports 50200–50240. The setup defaults to loopback for
 same-host Chromium; Windows Firefox should use the private-adapter setup below. TCP
 fallback is enabled for the media transport. Other computers/production require a
@@ -48,11 +50,11 @@ migrations or message/email dispatch is required by this integration.
 
 ## Compose ownership
 
-Video services are part of the main hive-os-infra project as video-backend and video-media. The pre-existing hive-video_video-data volume is reused explicitly as an external volume; its name is retained to preserve data. The Zoom backend source remains in its original repository.
+Video services are part of the main hive-os-infra project as video-backend and video-media. The pre-existing hive-video_video-data volume is reused explicitly as an external volume; its name is retained to preserve data. The container build source lives under `video-backend` in this repository.
 
 ## Source and prerequisites
 
-Clone https://github.com/Techiveet/zoom_clone into the sibling `../../zoom-clone` directory (relative to hive-os-infra). Run setup from WSL with Python 3 and Docker Compose v2. Setup creates local secrets only when absent, connects the Hive backend environment, and creates the named volume if needed. It preserves existing video credentials and data. Never commit `.env`, `.video`, or database backups. After changing environment settings, clear cached Laravel configuration before reloading Octane.
+Run setup from WSL with Python 3 and Docker Compose v2. Setup creates local secrets only when absent, connects the Hive backend environment, and creates the named volume if needed. It preserves existing video credentials and data. Never commit `.env`, `.video`, or database backups. After changing environment settings, clear cached Laravel configuration before reloading Octane.
 
 The optional `docker-compose.local-monitoring.yml` removes host backend/Reverb port bindings on this workstation, where other services own those ports. Use it only with an existing frontend proxy that reaches those services over the Docker network.
 
