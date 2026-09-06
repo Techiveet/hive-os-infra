@@ -73,7 +73,7 @@
 	reverse_proxy reverb:9000
 }
 
-{$VIDEO_DOMAIN:hive-video.gulfingot.com} {
+hive-video.gulfingot.com {
 	import security
 	encode zstd gzip
 	reverse_proxy video-media:7880

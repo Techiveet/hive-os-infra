@@ -16,6 +16,23 @@ docker compose up -d --build video-backend video-media
 docker exec hive-backend php artisan octane:reload --no-ansi
 ```
 
+## Production media host
+
+The shared production Caddy gateway terminates TLS for
+`hive-video.gulfingot.com` and proxies signaling to `video-media:7880`.
+LiveKit publishes TCP media on 7882 and multiplexed UDP media on 7883. Keep
+those two ports open on the VPS firewall.
+
+Install the tracked socket-buffer settings before starting production media:
+
+```sh
+install -m 0644 deploy/99-hive-livekit.conf /etc/sysctl.d/99-hive-livekit.conf
+sysctl --system
+```
+
+After changing the shared Caddyfile, validate it with `caddy validate` and
+reload Caddy before testing the HTTPS and WebSocket endpoints.
+
 Private settings are in .video/backend.env, .video/livekit.yaml and the Hive
 backend .env. Do not commit these files. The media endpoint is
 ws://127.0.0.1:17880; TCP media uses 17881, multiplexed UDP media uses 17883,
