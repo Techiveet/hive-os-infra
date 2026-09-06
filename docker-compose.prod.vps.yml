@@ -22,6 +22,7 @@ services:
       FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
       BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
       REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
+      VIDEO_DOMAIN: ${VIDEO_DOMAIN:-hive-video.gulfingot.com}
       HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
       MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
       GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-hive-monitor.gulfingot.com}
@@ -37,6 +38,8 @@ services:
       backend:
         condition: service_started
       reverb:
+        condition: service_started
+      video-media:
         condition: service_started
     networks:
       - hive-network
@@ -267,6 +270,9 @@ services:
       REVERB_PORT: ${REVERB_PORT:-9000}
       REVERB_SCHEME: ${REVERB_SCHEME:-http}
       PUSHER_HOST: reverb
+      HIVE_VIDEO_ENABLED: ${HIVE_VIDEO_ENABLED:-true}
+      HIVE_VIDEO_BACKEND_URL: ${HIVE_VIDEO_BACKEND_URL:-http://video-backend:5001}
+      HIVE_VIDEO_SECRET: ${HIVE_VIDEO_SECRET:?HIVE_VIDEO_SECRET must be set in .env}
     depends_on:
       redis:
         condition: service_healthy
@@ -281,6 +287,8 @@ services:
       gotenberg:
         condition: service_started
       ffmpeg:
+        condition: service_healthy
+      video-backend:
         condition: service_healthy
     command: >
       sh -lc '
@@ -407,6 +415,71 @@ services:
     networks:
       - hive-network
       - hive-production-data
+
+  # Hive video authorization bridge. Only Laravel reaches this service.
+  video-backend:
+    build:
+      context: ./video-backend
+      dockerfile: Dockerfile
+    image: hive-video-backend:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 5001
+      ALLOWED_ORIGINS: https://${FRONTEND_DOMAIN:-hive.gulfingot.com}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN:-hive.gulfingot.com}
+      PUBLIC_FRONTEND_URL: https://${FRONTEND_DOMAIN:-hive.gulfingot.com}
+      AUTH_TOKEN_SECRET: ${VIDEO_AUTH_TOKEN_SECRET:?VIDEO_AUTH_TOKEN_SECRET must be set in .env}
+      BILLING_WEBHOOK_SECRET: ${VIDEO_BILLING_WEBHOOK_SECRET:?VIDEO_BILLING_WEBHOOK_SECRET must be set in .env}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY must be set in .env}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET must be set in .env}
+      LIVEKIT_HTTP_URL: http://video-media:7880
+      LIVEKIT_WS_URL: wss://${VIDEO_DOMAIN:-hive-video.gulfingot.com}
+      HIVE_VIDEO_SECRET: ${HIVE_VIDEO_SECRET:?HIVE_VIDEO_SECRET must be set in .env}
+    volumes:
+      - hive-video-data:/app/data
+    expose:
+      - "5001"
+    depends_on:
+      video-media:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - hive-network
+
+  # WebRTC signaling and SFU media plane. API/WebSocket traffic stays behind
+  # Caddy; only the ICE fallback and UDP media range are exposed on the host.
+  video-media:
+    image: livekit/livekit-server:v1.13.6
+    restart: unless-stopped
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses:
+          - "0.0.0.0"
+        rtc:
+          tcp_port: 7882
+          udp_port: 7883
+          use_external_ip: true
+        keys:
+          ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY must be set in .env}: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET must be set in .env}
+        logging:
+          level: info
+          json: true
+    ports:
+      - "7882:7882/tcp"
+      - "7883:7883/udp"
+    expose:
+      - "7880"
+    networks:
+      - hive-network
 
   # Next.js Frontend
   frontend:
@@ -540,6 +613,9 @@ services:
       - "8080"
     networks:
       - hive-network
+
+volumes:
+  hive-video-data:
 
 networks:
   hive-network:

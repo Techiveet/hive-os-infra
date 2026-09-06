@@ -13,7 +13,7 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 
 		# Permissions policy
-		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		Permissions-Policy "geolocation=(), microphone=(self), camera=(self), display-capture=(self)"
 
 		# Content Security Policy (Next.js + Laravel).
 		# Wildcards are scoped to the platform root domain instead of "https://*"
@@ -71,6 +71,12 @@
 	import security
 	encode zstd gzip
 	reverse_proxy reverb:9000
+}
+
+{$VIDEO_DOMAIN:hive-video.gulfingot.com} {
+	import security
+	encode zstd gzip
+	reverse_proxy video-media:7880
 }
 
 {$HORIZON_DOMAIN} {
