@@ -1,0 +1,67 @@
+# GPU passthrough for the assistant's self-hosted model.
+#
+# Opt-in, as a separate file rather than a change to docker-compose.yml, for one
+# reason: a machine without the NVIDIA container toolkit cannot start a service
+# that reserves an NVIDIA device, so folding this into the base file would stop
+# Hive coming up anywhere without a GPU. Kept apart, the base file runs
+# everywhere and this is added only where it applies.
+#
+# Why it is worth adding where it does apply — measured on this deployment with
+# `php artisan copilot:models`, CPU-only:
+#
+#   qwen2.5:3b    ~21-27s median per reply
+#   qwen2.5:7b    ~84s
+#   gemma3:12b    could not finish a reply inside 280s
+#
+# Those numbers are why the default model is a 3B: not because it answers
+# better, but because it is the only size a person will wait for on cores. With
+# the GPU visible, that constraint mostly goes away, and a larger model becomes
+# a real option — re-run `copilot:models` afterwards rather than assuming it.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d ollama
+#
+# Verify it took, rather than trusting that it did. Ollama falls back to CPU
+# silently when it cannot see a device, which looks exactly like a slow machine:
+#   docker logs hive-ollama 2>&1 | grep "inference compute"
+# A working passthrough names the card, e.g.
+#   library=CUDA compute=8.6 name=CUDA0 description="NVIDIA GeForce RTX 3080 Ti…"
+#
+# On WSL2 there are no /dev/nvidia* nodes inside the container — the driver
+# arrives through /dev/dxg and injected CUDA libraries — so their absence is not
+# evidence of a problem. The log line above is.
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # Every visible GPU. On a machine that also runs a display or
+              # other workloads, pin one instead with `device_ids: ["0"]`.
+              count: all
+              capabilities: [gpu]
+    environment:
+      # The base file keeps one model resident for 24h so the first message
+      # after an idle spell is not noticeably slower. That reasoning is stronger
+      # on a GPU, where the load is a VRAM transfer rather than a page-in.
+      OLLAMA_KEEP_ALIVE: "24h"
+      # Still one generation at a time: this GPU is usually shared with a
+      # desktop session, and two concurrent generations evict each other's
+      # weights rather than run twice as fast. Raise it on a dedicated box.
+      OLLAMA_NUM_PARALLEL: "1"
+
+      # Two models resident, not one — and this is not tuning, it is a
+      # correctness matter for how the assistant works.
+      #
+      # Every turn uses two different models: the embedder for retrieval, then
+      # the chat model to word the answer. With a ceiling of one, they evict
+      # each other on every single turn, so each reply pays an 8 GB reload.
+      # Measured with the ceiling at one: a reply that should take ~19s timed
+      # out at 55s, and `ollama ps` showed only the embedder resident.
+      #
+      # 16 GB comfortably holds a 12B at Q4 (~8.5 GB) alongside a 300M embedder
+      # (~0.7 GB). On a smaller card, prefer a smaller chat model over dropping
+      # back to one slot.
+      OLLAMA_MAX_LOADED_MODELS: "2"
