@@ -656,7 +656,9 @@ services:
     expose:
       - "9000"
     networks:
-      - hive-network
+      hive-network:
+        aliases:
+          - hive-reverb
 
   # Next.js Frontend
   frontend:

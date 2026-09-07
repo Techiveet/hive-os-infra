@@ -70,7 +70,7 @@
 
 	# Keep WebSocket upgrades working on the API domain for older clients.
 	handle_path /app/* {
-		reverse_proxy reverb:9000
+		reverse_proxy hive-reverb:9000
 	}
 
 	handle {
@@ -85,7 +85,7 @@
 		resolvers 1.1.1.1 1.0.0.1
 	}
 
-	reverse_proxy reverb:9000
+	reverse_proxy hive-reverb:9000
 }
 
 {$HORIZON_DOMAIN:hive-queue.gulfingot.com} {

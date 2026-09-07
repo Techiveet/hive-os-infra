@@ -413,8 +413,10 @@ services:
     expose:
       - "9000"
     networks:
-      - hive-network
-      - hive-production-data
+      hive-network:
+        aliases:
+          - hive-reverb
+      hive-production-data:
 
   # Hive video authorization bridge. Only Laravel reaches this service.
   video-backend:

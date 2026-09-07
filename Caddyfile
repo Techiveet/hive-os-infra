@@ -70,7 +70,7 @@
 {$REVERB_DOMAIN} {
 	import security
 	encode zstd gzip
-	reverse_proxy reverb:9000
+	reverse_proxy hive-reverb:9000
 }
 
 hive-video.gulfingot.com {
