@@ -106,7 +106,7 @@ services:
       - hive-network
 
   seaweedfs-bootstrap:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: hive-seaweedfs-bootstrap
     restart: "no"
     depends_on:

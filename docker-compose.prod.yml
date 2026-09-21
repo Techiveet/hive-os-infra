@@ -149,7 +149,7 @@ services:
   #   docker compose -f docker-compose.prod.yml --profile backup-offsite up -d
   # after filling in the BACKUP_REMOTE_* vars in .env.
   db-backup-offsite:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: hive-db-backup-offsite
     restart: unless-stopped
     profiles:
@@ -214,7 +214,7 @@ services:
         max-file: "3"
 
   seaweedfs-bootstrap:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: hive-seaweedfs-bootstrap
     restart: "no"
     depends_on:
