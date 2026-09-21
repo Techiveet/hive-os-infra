@@ -31,7 +31,9 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - hive-network
+      hive-network:
+        aliases:
+          - pgsql
 
   # 3. SEARCH (Meilisearch)
   meilisearch:
@@ -465,6 +467,8 @@ services:
       DB_USERNAME: hive
       DB_PASSWORD: password
       REDIS_HOST: redis
+      CACHE_STORE: redis
+      CACHE_DRIVER: redis
       BROADCAST_CONNECTION: reverb
       REVERB_APP_ID: "326162"
       REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
@@ -715,7 +719,7 @@ services:
       - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17881:17881"
       - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17882:17882/udp"
       - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17883:17883/udp"
-      - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:50200-50240:50200-50240/udp"
+      - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:50300-50340:50300-50340/udp"
     volumes:
       - ./.video/livekit.yaml:/etc/livekit.yaml:ro
     networks: [hive-network]
