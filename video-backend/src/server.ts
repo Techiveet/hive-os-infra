@@ -686,6 +686,12 @@ app.post("/api/billing/checkout", authenticateUser, (req, res) => {
 
 // 3. Demo checkout confirmation for the in-app simulated payment flow
 app.post("/api/billing/demo-confirm", authenticateUser, (req, res) => {
+  // Simulated checkout for local prototypes. In production it would let any
+  // signed-in user grant themselves a paid plan without paying.
+  if (isProduction && process.env.ALLOW_DEMO_BILLING !== "true") {
+    return res.status(404).json({ error: "Not found" });
+  }
+
   try {
     const user = (req as any).user as db.User;
     const { plan, transactionId } = req.body;
@@ -710,10 +716,18 @@ app.post("/api/billing/demo-confirm", authenticateUser, (req, res) => {
   }
 });
 
+/** Constant-time comparison so the webhook secret cannot be probed by timing. */
+function secretsMatch(received: string | undefined, expected: string): boolean {
+  if (!received) return false;
+  const a = crypto.createHash("sha256").update(received).digest();
+  const b = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
 // 4. Webhook callback (server-to-server Arifpay callback notification)
 app.post("/api/billing/webhook", (req, res) => {
   try {
-    if (BILLING_WEBHOOK_SECRET && req.get("x-webhook-secret") !== BILLING_WEBHOOK_SECRET) {
+    if (BILLING_WEBHOOK_SECRET && !secretsMatch(req.get("x-webhook-secret"), BILLING_WEBHOOK_SECRET)) {
       return res.status(401).json({ error: "Invalid webhook signature" });
     }
 

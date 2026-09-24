@@ -8,6 +8,20 @@ fi
 
 cd /var/www/hive
 
+# This script drops and re-seeds every production database. Refuse to run
+# unless the operator confirms explicitly, either interactively or with
+# RESET_PROD_CONFIRM=wipe-production for automation.
+if [ "${RESET_PROD_CONFIRM:-}" != "wipe-production" ]; then
+  if [ -t 0 ]; then
+    printf 'This ERASES all production data (central and every tenant).\nType "wipe-production" to continue: '
+    read -r answer
+    [ "$answer" = "wipe-production" ] || { echo "Aborted."; exit 1; }
+  else
+    echo "Refusing to reset production without RESET_PROD_CONFIRM=wipe-production." >&2
+    exit 1
+  fi
+fi
+
 COMPOSE_FILE="docker-compose.prod.yml"
 COMPOSE="docker compose -f ${COMPOSE_FILE}"
 
@@ -201,6 +215,9 @@ $COMPOSE exec -T backend php artisan tenants:run localization:sync || true
 echo "== Sync system access and fallback domains =="
 $COMPOSE exec -T backend php artisan hive:sync-system-access --force || true
 $COMPOSE exec -T backend php artisan hive:sync-fallback-domains || true
+
+echo "NOTE: seeded admin accounts use the seeder's default password and must"
+echo "      change it on first sign-in (must_change_password is set in production)."
 
 echo "== Rebuild Laravel caches =="
 $COMPOSE exec -T backend php artisan optimize:clear

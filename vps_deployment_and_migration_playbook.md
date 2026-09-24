@@ -63,7 +63,7 @@ newgrp docker
 ## Part 2: Project Setup & Environment Configuration
 
 ### 1. Copying the Infrastructure Layer
-You only need the orchestration/infrastructure repository (`hive-os-infra`) on the VPS, as application images are pulled directly from GHCR (`ghcr.io/mcmike2223/hive-os-backend:latest` and `ghcr.io/mcmike2223/hive-os-frontend:latest`).
+You only need the orchestration/infrastructure repository (`hive-os-infra`) on the VPS, as application images are pulled directly from GHCR (`ghcr.io/techiveet/hive-os-backend:latest` and `ghcr.io/techiveet/hive-os-frontend:latest`).
 
 Create your application directory and clone/copy the files:
 ```bash

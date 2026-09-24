@@ -21,8 +21,8 @@ exec >>"$LOG" 2>&1
 echo "=== $(date -Is) check ==="
 
 COMPOSE="docker compose -f docker-compose.prod.yml"
-BIMG=ghcr.io/mcmike2223/hive-os-backend:latest
-FIMG=ghcr.io/mcmike2223/hive-os-frontend:latest
+BIMG=ghcr.io/techiveet/hive-os-backend:latest
+FIMG=ghcr.io/techiveet/hive-os-frontend:latest
 
 b_run=$(docker inspect --format '{{.Image}}' hive-backend 2>/dev/null)
 f_run=$(docker inspect --format '{{.Image}}' hive-frontend 2>/dev/null)

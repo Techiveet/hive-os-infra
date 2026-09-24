@@ -49,8 +49,20 @@ services:
     image: redis:alpine
     container_name: hive-redis
     restart: unless-stopped
+    # Queues, sessions and cache share this instance. Cap memory below the
+    # container limit and only evict keys that carry a TTL (cache, sessions),
+    # never queued jobs. Set REDIS_PASSWORD in .env to require auth; the
+    # backend reads the same variable.
+    command: >
+      sh -c 'exec redis-server --appendonly yes --maxmemory 640mb --maxmemory-policy volatile-lru $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # redis-cli (healthcheck, scripts) authenticates from this.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
     expose:
       - "6379"
+    volumes:
+      - ./storage/redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -219,7 +231,7 @@ services:
 
   # Laravel Backend
   backend:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:latest
     pull_policy: always
     container_name: hive-backend
     restart: unless-stopped
@@ -309,7 +321,7 @@ services:
 
   # Queue Worker / Horizon
   queue:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:latest
     pull_policy: always
     container_name: hive-queue
     restart: unless-stopped
@@ -368,7 +380,7 @@ services:
 
   # WebSocket Engine
   reverb:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:latest
     pull_policy: always
     container_name: hive-reverb
     restart: unless-stopped
@@ -493,7 +505,7 @@ services:
 
   # Next.js Frontend
   frontend:
-    image: ghcr.io/mcmike2223/hive-os-frontend:latest
+    image: ghcr.io/techiveet/hive-os-frontend:latest
     pull_policy: always
     container_name: hive-frontend
     restart: unless-stopped

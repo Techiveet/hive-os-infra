@@ -21,7 +21,7 @@ listens only on the dev machine. Choose one:
 ### 2. The production backend image must include the LaraOwl client
 
 `laraowl/client` was added to `hive-os-backend` (composer) AFTER the current
-`ghcr.io/mcmike2223/hive-os-backend:latest` image was built. The production
+`ghcr.io/techiveet/hive-os-backend:latest` image was built. The production
 image must be rebuilt and pushed with the client included, then redeployed via
 the existing pipeline (`hive-os-infra/scripts/build-and-push.sh` +
 `deploy-prod.sh`).

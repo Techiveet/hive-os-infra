@@ -38,3 +38,6 @@ __pycache__/
 *.py[cod]
 
 .video/
+
+__pycache__/
+*.pyc

@@ -28,8 +28,8 @@ BACKEND_DIR="$HIVE_ROOT/hive-os-backend"
 FRONTEND_DIR="$HIVE_ROOT/hive-os-frontend"
 ENV_FILE="${ENV_FILE:-$SCRIPT_DIR/../.env.prod}"   # infra .env.prod by default
 
-BACKEND_IMG="ghcr.io/mcmike2223/hive-os-backend:latest"
-FRONTEND_IMG="ghcr.io/mcmike2223/hive-os-frontend:latest"
+BACKEND_IMG="ghcr.io/techiveet/hive-os-backend:latest"
+FRONTEND_IMG="ghcr.io/techiveet/hive-os-frontend:latest"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
