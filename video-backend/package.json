@@ -7,7 +7,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
     "start": "node dist/server.js",
-    "test": "tsc && node --test test/"
+    "test": "tsc && node --test test/*.cjs"
   },
   "dependencies": {
     "@types/cookie-parser": "^1.4.10",
