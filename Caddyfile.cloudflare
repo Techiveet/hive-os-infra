@@ -1,5 +1,7 @@
 {
-	admin :2019
+	# Admin API only on the container's loopback: any other container on the
+	# Docker network could otherwise rewrite the proxy config.
+	admin localhost:2019
 	# Resolve the real visitor IP. Requests arriving from Cloudflare's edge
 	# carry it in CF-Connecting-IP; from anywhere else the TCP peer is the
 	# client, and a spoofed header is ignored. Ranges: https://www.cloudflare.com/ips/
