@@ -255,7 +255,9 @@ services:
 
   # AI Background Removal
   rembg:
-    image: danielgatis/rembg:latest
+    # Pinned: :latest (rembg 2.0.85 / onnxruntime 1.30) is OOM-killed under
+    # the 1.5G cap on a 64x64 PNG; 2.0.75 serves it at ~1G.
+    image: danielgatis/rembg:2.0.75@sha256:cab922905c34a1a08ba8a98d48034b085a223579e96b0925a8e99d123d7f578e
     container_name: hive-ai-rembg
     restart: unless-stopped
     deploy:
