@@ -118,7 +118,10 @@ services:
       - hive-network
 
   seaweedfs-bootstrap:
-    image: quay.io/minio/mc:latest
+    build:
+      context: ./seaweedfs-bootstrap
+      dockerfile: Dockerfile
+    image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-seaweedfs-bootstrap
     restart: "no"
     depends_on:
