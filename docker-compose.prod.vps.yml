@@ -454,7 +454,12 @@ services:
       hive-network:
         aliases:
           - hive-reverb
+      # Must not be left null: Coolify's compose parser drops null-valued
+      # network mappings, which detached Reverb from the edge network and made
+      # hive-caddy's `reverse_proxy hive-reverb:9000` return 502.
       hive-production-data:
+        aliases:
+          - hive-reverb
 
   # Hive video authorization bridge. Only Laravel reaches this service.
   video-backend:
