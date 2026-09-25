@@ -49,6 +49,16 @@ services:
     image: redis:alpine
     container_name: hive-redis
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Queues, sessions and cache share this instance. Cap memory below the
     # container limit and only evict keys that carry a TTL (cache, sessions),
     # never queued jobs. Set REDIS_PASSWORD in .env to require auth; the
@@ -79,6 +89,16 @@ services:
     image: postgres:17-alpine
     container_name: hive-db
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
       - "127.0.0.1:${DB_HOST_PORT:-5433}:5432"
     env_file:
@@ -107,11 +127,26 @@ services:
     image: chrislusf/seaweedfs:3.94
     container_name: hive-seaweedfs
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Coolify attaches every service to its own default network as well as
     # hive-network, so this container has two IPs. `weed server` otherwise
     # binds only to the single IP it auto-detects, leaving the other network
     # (the one the backend resolves `seaweedfs` to) refusing 8333/9333.
-    command: server -dir=/data -s3 -ip.bind=0.0.0.0
+    #
+    # weed 3.94 ignores AWS_* env vars, so without an identity file the S3 API
+    # accepts anonymous requests. Render one from the same credentials the
+    # backend signs with; anonymous and wrongly-signed requests then get 403.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        : "$${AWS_ACCESS_KEY_ID:?}" "$${AWS_SECRET_ACCESS_KEY:?}"
+        mkdir -p /etc/seaweedfs
+        printf '{"identities":[{"name":"hive","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}' "$$AWS_ACCESS_KEY_ID" "$$AWS_SECRET_ACCESS_KEY" > /etc/seaweedfs/s3.json
+        exec /entrypoint.sh server -dir=/data -s3 -ip.bind=0.0.0.0 -s3.config=/etc/seaweedfs/s3.json
     environment:
       AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-hive-seaweedfs}
       AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-change-this-seaweedfs-secret}
@@ -138,6 +173,11 @@ services:
     image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-seaweedfs-bootstrap
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       seaweedfs:
         condition: service_started
@@ -186,6 +226,16 @@ services:
     image: getmeili/meilisearch:v1.10
     container_name: hive-search
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       MEILI_MASTER_KEY: ${MEILISEARCH_KEY:-}
       MEILI_NO_ANALYTICS: "true"
@@ -208,7 +258,21 @@ services:
     image: danielgatis/rembg:latest
     container_name: hive-ai-rembg
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     command: s --host 0.0.0.0 --port 5000
+    volumes:
+      # Pre-seeded u2net model (176 MB). Without it the first request
+      # downloads and loads the model at once and blows past the memory cap.
+      - /root/projects/hive/storage/rembg-models:/root/.u2net
     expose:
       - "5000"
     networks:
@@ -222,6 +286,16 @@ services:
     image: hive-ffmpeg
     container_name: hive-ffmpeg
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     expose:
       - "9090"
     healthcheck:
@@ -242,6 +316,16 @@ services:
     image: gotenberg/gotenberg:8
     container_name: hive-gotenberg
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     expose:
       - "3000"
     networks:
@@ -253,6 +337,16 @@ services:
     pull_policy: always
     container_name: hive-backend
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
@@ -343,6 +437,16 @@ services:
     pull_policy: always
     container_name: hive-queue
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
@@ -396,12 +500,85 @@ services:
       - hive-network
       - hive-production-data
 
+  # Laravel scheduler (backups, trash purge, integrations sync, ...). The
+  # legacy stack ran this as hive-scheduler; it was lost in the Coolify move.
+  scheduler:
+    image: ghcr.io/techiveet/hive-os-backend:latest
+    pull_policy: always
+    container_name: hive-scheduler
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      DB_CONNECTION: ${DB_CONNECTION:-pgsql}
+      CACHE_STORE: ${CACHE_STORE:-redis}
+      SESSION_DRIVER: ${SESSION_DRIVER:-redis}
+      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
+      DB_HOST: ${DB_INTERNAL_HOST:-db}
+      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
+      REDIS_CLIENT: predis
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
+      MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      FFMPEG_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
+      BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
+      REVERB_APP_ID: ${REVERB_APP_ID}
+      REVERB_APP_KEY: ${REVERB_APP_KEY}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      REVERB_HOST: reverb
+      REVERB_PORT: ${REVERB_PORT:-9000}
+      REVERB_SCHEME: ${REVERB_SCHEME:-http}
+      PUSHER_HOST: reverb
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    command: >
+      sh -lc '
+        mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
+        (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
+        chmod -R ug+rwX storage bootstrap/cache &&
+        exec php artisan schedule:work
+      '
+    networks:
+      - hive-network
+
   # WebSocket Engine
   reverb:
     image: ghcr.io/techiveet/hive-os-backend:latest
     pull_policy: always
     container_name: hive-reverb
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
@@ -468,6 +645,11 @@ services:
       dockerfile: Dockerfile
     image: hive-video-backend:latest
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
@@ -504,6 +686,11 @@ services:
   video-media:
     image: livekit/livekit-server:v1.13.6
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
       LIVEKIT_CONFIG: |
         port: 7880
@@ -533,6 +720,11 @@ services:
     pull_policy: always
     container_name: hive-frontend
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
