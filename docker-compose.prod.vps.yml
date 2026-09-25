@@ -88,7 +88,9 @@ services:
       POSTGRES_USER: ${DB_USERNAME:-hive}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-}
     volumes:
-      - ./storage/db-data:/var/lib/postgresql/data
+      # Preserve the established production cluster while moving process
+      # ownership to the Git-connected Coolify application.
+      - /root/projects/hive/storage/db-data:/var/lib/postgresql/data
     expose:
       - "5432"
     healthcheck:
@@ -110,7 +112,9 @@ services:
       AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-hive-seaweedfs}
       AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-change-this-seaweedfs-secret}
     volumes:
-      - ./storage/seaweedfs-data:/data
+      # Keep the existing customer object data; only the managing container
+      # changes during the Coolify cutover.
+      - /root/projects/hive/storage/seaweedfs-data:/data
     expose:
       - "8333"
       - "9333"
@@ -176,7 +180,8 @@ services:
       MEILI_MASTER_KEY: ${MEILISEARCH_KEY:-}
       MEILI_NO_ANALYTICS: "true"
     volumes:
-      - ./storage/search-data:/meili_data
+      # Reuse the established production index during the Coolify cutover.
+      - /root/projects/hive/storage/search-data:/meili_data
     expose:
       - "7700"
     healthcheck:
