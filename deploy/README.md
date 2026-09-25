@@ -35,3 +35,7 @@ when its image ID actually changes; otherwise it logs `no change` and exits.
 > Infra changes (compose / Caddyfile) are **not** image-based and are still applied
 > manually — copy the changed files into `/root/projects/hive` and run
 > `scripts/deploy-prod.sh` (or recreate the affected services).
+
+> The backend image runs as `www-data` (uid 82). If this legacy stack bind-mounts
+> `./storage/app-storage`, make it writable once before deploying a new image:
+> `chown -R 82:82 /root/projects/hive/storage/app-storage`.

@@ -33,6 +33,8 @@
 # Send it the IP resolved above instead of Caddy's default, which would name
 # the Cloudflare edge when proxied.
 (backend_upstream) {
+	# Prometheus scrapes /metrics over the Docker network; it is not public.
+	respond /metrics 404
 	reverse_proxy backend:8000 {
 		header_up X-Forwarded-For {client_ip}
 	}
