@@ -505,6 +505,7 @@ services:
       - "7880"
     networks:
       - hive-network
+      - hive-production-data
 
   # Next.js Frontend
   frontend:
@@ -565,6 +566,7 @@ services:
       start_period: 30s
     networks:
       - hive-network
+      - hive-production-data
 
   # Monitoring: Prometheus
   prometheus:
