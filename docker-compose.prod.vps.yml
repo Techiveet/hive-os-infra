@@ -513,13 +513,16 @@ services:
         (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan optimize:clear &&
         php artisan config:cache &&
-        php artisan migrate --force &&
-        php artisan tenants:migrate --force &&
+        (php artisan hive:deploy --force || echo "hive:deploy FAILED: databases were not migrated; serving with the current schema. See the output above.") &&
         exec php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
       '
     expose:
       - "8000"
-    # Healthy only once migrations have run and Octane answers, so the queue,
+    # hive:deploy backs up, migrates (central and every workspace), adds new
+    # permissions and runs new deploy seeders before Octane starts. It refuses
+    # migrations that would delete data. If it fails, the app still starts on
+    # the current schema so a bad migration cannot take production down.
+    # Healthy only once that has finished and Octane answers, so the queue,
     # scheduler and Reverb never start against an old schema.
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/up || exit 1"]

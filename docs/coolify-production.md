@@ -78,13 +78,34 @@ Setting `REDIS_PASSWORD` for the first time turns on Redis authentication;
 the backend, queue, scheduler and Reverb read the same variable, so they
 reconnect with it on the same deploy.
 
-## Migrations
+## Migrations and seeders
 
-The backend container runs `migrate --force` and `tenants:migrate --force`
-before Octane starts, and only reports healthy afterwards. The queue,
-scheduler, Reverb and frontend wait for that, so nothing runs against an old
-schema. A failed migration keeps the backend unhealthy and the deploy fails
-visibly; check the backend logs.
+Every deploy runs `php artisan hive:deploy --force` in the backend container
+before Octane starts:
+
+1. Lists pending migrations for the central database and every workspace
+   database.
+2. Refuses to run anything if a pending migration would delete data (drops a
+   column or table, truncates). CI blocks such migrations on the PR unless
+   they carry `@hive-allow-data-loss <reason>`.
+3. Dumps each database that has pending migrations to
+   `storage/app/private/system-backups/pre-deploy/<timestamp>/` (the
+   `hive-app-backups` volume; the last 5 runs are kept).
+4. Runs `migrate` and `tenants:migrate`. Migrations only add what is missing;
+   existing rows are kept.
+5. Adds new permissions: created, granted to Super Admin and to the built-in
+   roles that include them. Customised roles are never reset.
+6. Runs each seeder listed in the backend's `config/deploy.php` once per
+   database, recorded in `deploy_seeder_runs`. Workspaces in
+   `tenancy.migrated_tenants` (Aqua-Uno) never get tenant seeders.
+
+If it fails, the output is in the backend container log starting with
+`hive:deploy FAILED`; the app keeps running on the current schema. To see what
+a deploy would do without changing anything:
+
+```bash
+docker exec hive-backend php artisan hive:deploy --pretend
+```
 
 ## Backups
 
