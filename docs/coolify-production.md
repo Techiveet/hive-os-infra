@@ -47,7 +47,24 @@ These host directories hold customer data and must never be removed:
 
 ## Edge proxy
 
-Public traffic for every site on this host still enters through the standalone
-`hive-caddy` container (ports 80/443), not Coolify's proxy. It fronts Hive,
-Dejen, Swift, Gubae, LiveKit, Aqua Uno, the EV tenant APIs and the Coolify UI
-itself. Do not stop it until those routes have moved to Coolify's proxy.
+All public traffic for every site on this host (Hive, Swift, Dejen, Aqua Uno,
+Gubae, LiveKit, the EV tenant APIs, Hive Owl, SSO and the Coolify UI itself)
+enters through Coolify's own proxy, `coolify-proxy` (Caddy via
+caddy-docker-proxy). The standalone `hive-caddy` container was retired on
+2026-09-26.
+
+- Routing lives in one file, `/data/coolify/proxy/caddy/dynamic/edge.caddy`
+  (Coolify: Server, Proxy, Dynamic Configurations). Caddy reloads it
+  automatically.
+- Hive tenant custom domains get certificates on demand; the backend approves
+  each domain through `/api/internal/caddy/allow-domain`.
+- The proxy joins every Coolify app network, so upstream names in `edge.caddy`
+  must be unique across all apps (Swift's web service is `swift-app` because
+  Aqua Uno also has a service called `app`).
+
+## Backups
+
+Coolify scheduled tasks run `sh /backups/backup.sh` nightly in each app's
+MySQL container and keep 14 days under `/srv/<app>/backups`: Swift 02:30,
+Dejen 02:45, Aqua Uno 03:00 (UTC). Hive's own scheduler runs
+`system-backups:run` at 02:00.
