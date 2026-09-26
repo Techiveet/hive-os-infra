@@ -466,7 +466,7 @@ services:
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan optimize:clear &&
         php artisan config:cache &&
         php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
@@ -544,7 +544,7 @@ services:
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan horizon
       '
     networks:
@@ -608,7 +608,7 @@ services:
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan schedule:work
       '
     networks:
@@ -664,7 +664,7 @@ services:
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan reverb:start --host=0.0.0.0 --port=9000
       '
     expose:

@@ -33,14 +33,14 @@ On the VPS, in the backend service's `.env` (the compose uses `env_file: .env`):
 ```ini
 LARAOWL_ENABLED=true
 LARAOWL_SERVER_URL=https://hive-monitor.gulfingot.com   # the public URL from prerequisite 1
-LARAOWL_TOKEN=96ae7bb974b624885162e99f3b79c60ed2bf0e4d0fa18b74a3bf9be3f4833a67
+LARAOWL_TOKEN=<project api_token from the LaraOwl dashboard; never commit it>
 LARAOWL_SERVER_NAME=hive-os-backend
 ```
 
-The token is project 2's (`hive.gulfingot.com`) api_token — rotated on
-2026-08-16 because the previous value was visible in a session transcript.
-Rotate it again in the dashboard (or via
-`UPDATE projects SET api_token=... WHERE id=2;`) before any shared use.
+The token is project 2's (`hive.gulfingot.com`) api_token. Keep it only in
+the server's `.env`. A value was committed to this file until 2026-09; it must
+be treated as leaked and rotated in the dashboard (or via
+`UPDATE projects SET api_token=... WHERE id=2;`).
 
 Then restart the backend so Octane picks it up:
 `docker compose -f docker-compose.prod.vps.yml restart backend`
