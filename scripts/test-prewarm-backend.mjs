@@ -37,7 +37,7 @@ const WARMER = path.join(HERE, "prewarm-backend.mjs");
 const PUBLIC_ROUTES = ["/up", "/api/v1/languages/public"];
 const AUTH_ROUTES = ["/api/v1/dashboard", "/api/v1/settings/general/runtime"];
 const HOSTS = ["a.localhost", "b.localhost", "c.localhost"];
-const TENANT_ROUTES = ["/api/v1/dashboard"];
+const TENANT_ROUTES = ["/api/v1/dashboard", "/api/v1/settings/general/runtime"];
 const LOGIN_PATH = "/api/v1/tenant/login";
 // What a merely-contended pass still warms when nothing else is configured.
 const CONTENDED_SLICE = 2;
@@ -305,7 +305,7 @@ const severeLoad = (load * 0.5).toFixed(4);
 
 const cases = [
   {
-    name: "idle: one login per host, one dashboard per host, in configured order",
+    name: "idle: two tenant tiers — every dashboard before any runtime, then runtime per host in LRU order",
     env: {},
     expect: {
       loginsAs: [
@@ -314,7 +314,14 @@ const cases = [
         { host: "c.localhost", email: "admin@c.com" },
       ],
       tenantPasses: [
-        ["a.localhost /api/v1/dashboard", "b.localhost /api/v1/dashboard", "c.localhost /api/v1/dashboard"],
+        [
+          "a.localhost /api/v1/dashboard",
+          "b.localhost /api/v1/dashboard",
+          "c.localhost /api/v1/dashboard",
+          "a.localhost /api/v1/settings/general/runtime",
+          "b.localhost /api/v1/settings/general/runtime",
+          "c.localhost /api/v1/settings/general/runtime",
+        ],
       ],
       tokenOn: [
         { host: "a.localhost", passIndex: 0, token: (fake) => tokenOfHost(fake, "a.localhost") },
@@ -332,8 +339,8 @@ const cases = [
       ],
       logIncludes: [
         "tenant tier: 3 host(s) via /api/v1/tenant/login",
-        "tenants 3 of 3",
-        "tenant tier complete — 3 of 3 warmed",
+        "tenants 6 of 6",
+        "tenant tier complete — 6 of 6 warmed",
       ],
       logExcludes: ["backed off", "refused", "FAILED"],
     },
@@ -363,6 +370,32 @@ const cases = [
             "tenant tier backed off (load",
             "deferred, retry in",
           ],
+        },
+      }
+    : null,
+  load > 0.05
+    ? {
+        name: "contended with WARMUP_TENANT_REQUESTS=4: the runtime tier starts only once every dashboard is warm",
+        env: {
+          WARMUP_TENANT_LOAD_BACKOFF: contendedLoad,
+          WARMUP_TENANT_LOAD_SEVERE: (load * 10).toFixed(4),
+          WARMUP_TENANT_REQUESTS: "4",
+        },
+        expect: {
+          count: 4,
+          // Value order across tiers: tier 1 (dashboard) completes for all
+          // three hosts BEFORE tier 2 (runtime) begins — and within tier 2 the
+          // LRU rule picks a.localhost again (never runtime-warmed, configured
+          // order first). No runtime request may precede any dashboard.
+          tenantPasses: [
+            [
+              "a.localhost /api/v1/dashboard",
+              "b.localhost /api/v1/dashboard",
+              "c.localhost /api/v1/dashboard",
+              "a.localhost /api/v1/settings/general/runtime",
+            ],
+          ],
+          logIncludes: ["host contended (load", "capped at 4", "tenant tier backed off (load"],
         },
       }
     : null,
@@ -427,9 +460,9 @@ const cases = [
     expect: {
       count: 0,
       loginCounts: [{ host: "a.localhost", min: 0, max: 0 }],
-      // The summary proves the tier was not driven: "tenants 0 of 3" with no
+      // The summary proves the tier was not driven: "tenants 0 of 6" with no
       // tenant login line anywhere (skip-auth skips the login AND the tier).
-      logIncludes: ["tenants 0 of 3"],
+      logIncludes: ["tenants 0 of 6"],
       logExcludes: ["tenant login", "refused", "POST /api/v1/login"],
     },
   },

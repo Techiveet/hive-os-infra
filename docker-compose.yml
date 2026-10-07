@@ -324,7 +324,12 @@ services:
       # builds a 7-person team — hence its override.
       WARMUP_TENANT_HOSTS: "lanouveil.localhost global-b2b.localhost savory-lounge.localhost techive.localhost lms-demo.localhost"
       WARMUP_TENANT_OVERRIDES: "techive.localhost=mikiyas.aemero@techive.com:password"
-      WARMUP_TENANT_ROUTES: "/api/v1/dashboard"
+      # Two tenant routes, in value order: every tenant's dashboard is warmed
+      # before anyone's runtime call (the tier walks ALL hosts per route). The
+      # runtime route is registered per-tenant behind plain auth:sanctum (no
+      # permission gate — Modules/Core/routes/api.php), so any signed-in tenant
+      # admin reaches it; verified 200 live with a tenant token.
+      WARMUP_TENANT_ROUTES: "/api/v1/dashboard /api/v1/settings/general/runtime"
       WARMUP_TENANT_REQUESTS: "2"
       WARMUP_TENANT_LOAD_BACKOFF: "6"
       WARMUP_TENANT_BACKOFF_SECONDS: "60"
