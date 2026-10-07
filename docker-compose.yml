@@ -231,6 +231,16 @@ services:
       ffmpeg:
         condition: service_healthy
     command: php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
+    healthcheck:
+      # /up is Laravel's own health route, so this proves Octane/RoadRunner is
+      # actually serving HTTP, not merely that a php process exists.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/up"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # The entrypoint waits for Postgres, migrates, and rebuilds the docs
+      # search index on boot, so give it room before failures start to count.
+      start_period: 120s
     networks:
       hive-network:
         aliases:
@@ -255,6 +265,85 @@ services:
           # Legacy alias — no seeded tenant with id 'spacex'; kept for
           # compatibility.
           - spacex.localhost
+
+  # 7b. BACKEND PRE-WARMER (kills the first-call Octane worker boot)
+  #
+  # Octane boots the application inside a worker on that worker's first request:
+  # routes, config, service providers, DB/Redis connections, and the opcache
+  # entries for every file the request touches. Measured on this stack at
+  # ~1.1-1.2s for that first request against ~0.01-0.02s once the worker is warm,
+  # paid per worker (4 RoadRunner workers here). `/up` only proves the process is
+  # alive, so this also signs in once and exercises the authenticated surface —
+  # the part a human actually waits on. RoadRunner recycles workers after 500
+  # jobs or an hour, so it refreshes on an interval rather than warming once.
+  # See scripts/prewarm-backend.mjs.
+  backend-warmup:
+    image: node:22-alpine
+    container_name: hive-backend-warmup
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    volumes:
+      - ./scripts/prewarm-backend.mjs:/usr/local/bin/prewarm-backend.mjs:ro
+    environment:
+      WARMUP_BACKEND_URL: http://backend:8000
+      WARMUP_PUBLIC_ROUTES: "/up /api/v1/languages/public"
+      WARMUP_AUTH_ROUTES: "/api/v1/dashboard /api/v1/settings/general/runtime"
+      # The seeded central super admin (CentralUsersSeeder; password "password").
+      # Dev-stack credentials only — override for any other environment.
+      WARMUP_LOGIN_EMAIL: "super@hive.os"
+      WARMUP_LOGIN_PASSWORD: "password"
+      # Every worker has to be handed a request for its bootstrap to happen, so a
+      # pass covers the whole pool (5 workers here, auto-sized) — but with only 2
+      # requests in flight, so a real user's request is never queued behind the
+      # warmer. Firing all 8 at once measurably made the first post-restart
+      # request worse (12.8-16.1s against ~5s un-warmed).
+      WARMUP_REQUESTS: "5"
+      WARMUP_CONCURRENCY: "2"
+      # Watch the backend so warming follows a restart rather than the clock. A
+      # docker restart is unhealthy for only a couple of seconds and then answers
+      # 200, so the reliable signal is a probe that answers COLD, not a failure.
+      WARMUP_PROBE_SECONDS: "3"
+      # Per-tenant authenticated surface: logs each tenant's admin in via the
+      # tenant login route under the tenant's own Host (docker alias, kept in
+      # sync with the alias list above and TenantsSeeder), then warms the
+      # tenant-authenticated GET routes. Value-ordered and load-aware like the
+      # frontend warmer: central first, then one route across ALL tenants, then
+      # back to the second route; least-recently-warmed hosts first inside a
+      # tier; the tier is capped at WARMUP_TENANT_REQUESTS when the box is
+      # contended (probe-latency-aware too) and skipped when severe, with the
+      # deferred work retried after WARMUP_TENANT_BACKOFF_SECONDS. aquauno is a
+      # migrated tenant (config/tenancy.php migrated_tenants) whose synthetic
+      # accounts deliberately do not exist, so its login is expected to log a
+      # 401 and the pass moves on.
+      # Login cooldowns are per tenant (default 240s) and sit ABOVE the
+      # auth-login throttle windows (60s): the limiter counts 10/min per source
+      # IP across ALL login routes plus 5/min per email, so warmer logins never
+      # trip it on their own. techive has no admin@techive.com — the seeder
+      # builds a 7-person team — hence its override.
+      WARMUP_TENANT_HOSTS: "lanouveil.localhost global-b2b.localhost savory-lounge.localhost techive.localhost lms-demo.localhost"
+      WARMUP_TENANT_OVERRIDES: "techive.localhost=mikiyas.aemero@techive.com:password"
+      WARMUP_TENANT_ROUTES: "/api/v1/dashboard"
+      WARMUP_TENANT_REQUESTS: "2"
+      WARMUP_TENANT_LOAD_BACKOFF: "6"
+      WARMUP_TENANT_BACKOFF_SECONDS: "60"
+      WARMUP_TENANT_PROBE_BACKOFF_MS: "3000"
+      WARMUP_REFRESH_SECONDS: "300"
+    command: ["node", "/usr/local/bin/prewarm-backend.mjs"]
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      # "Healthy" = the warming loop is turning: the script writes
+      # /tmp/backend-warmup-heartbeat at the start of every pass and after every
+      # request, so a heartbeat older than 10 minutes means the loop is wedged.
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{process.exit(Date.now()-fs.statSync('/tmp/backend-warmup-heartbeat').mtimeMs<600000?0:1)}catch(e){process.exit(1)}"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - hive-network
 
   # 8. THE WORKER (Background Jobs)
   queue:
@@ -325,6 +414,15 @@ services:
       ffmpeg:
         condition: service_healthy
     command: php artisan horizon
+    healthcheck:
+      # horizon:status exit codes: 0 = running, 1 = paused, 2 = no master
+      # supervisor. A paused or dead Horizon is therefore unhealthy, not just a
+      # container that lost its process.
+      test: ["CMD", "php", "artisan", "horizon:status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks:
       - hive-network
 
@@ -394,6 +492,16 @@ services:
       seaweedfs-bootstrap:
         condition: service_completed_successfully
     command: php artisan schedule:work
+    healthcheck:
+      # Proves the app boots and the schedule resolves — a broken provider or a
+      # malformed scheduled command surfaces here. Liveness of the loop itself
+      # is covered by Docker supervision: PID 1 is `schedule:work`, so if the
+      # loop dies the container exits and restart: unless-stopped restarts it.
+      test: ["CMD", "php", "artisan", "schedule:list"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
     volumes:
       - ../hive-os-backend:/var/www/html
       - hive-backend-storage:/var/www/html/storage
@@ -424,8 +532,88 @@ services:
       # 🚀Forces Next.js to broadcast outside the container
       HOSTNAME: "0.0.0.0"
       PORT: 3000
+      # Next.js dev compile cache: the entrypoint keeps .next/dev across restarts
+      # and only resets it when the Next.js/Node/dependency signature changes, so
+      # a plain restart no longer forces every route to recompile. Set to
+      # "always" to force a reset on the next start.
+      NEXT_DEV_CACHE_RESET: "auto"
     depends_on:
       - backend
+    healthcheck:
+      # /health is the app's own dependency-free route handler, so a health
+      # check stays cheap instead of server-rendering a whole page every
+      # interval. Warming the heavy routes is frontend-warmup's job; the long
+      # start_period still covers the dev server's own boot.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 180s
+    networks:
+      - hive-network
+
+  # 9b. FRONTEND PRE-WARMER (kills the first-visit compile wait)
+  #
+  # `next dev` compiles each route on first request and the frontend resets its
+  # dev cache on every start, so without this the first visit after each start
+  # waits 1-17s per route (measured). This warms the key routes as soon as the
+  # dev server answers and refreshes them on an interval, so that wait lands
+  # here instead of on a human. See scripts/prewarm-frontend.mjs.
+  frontend-warmup:
+    image: node:22-alpine
+    container_name: hive-frontend-warmup
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_started
+    volumes:
+      - ./scripts/prewarm-frontend.mjs:/usr/local/bin/prewarm-frontend.mjs:ro
+    environment:
+      WARMUP_BASE_URL: http://frontend:3000
+      WARMUP_ROUTES: "/ /sign-in /forgot-password /dashboard /hivedocs"
+      # Seeded demo tenants as <id>.localhost — the same hosts the backend
+      # service carries as network aliases above, since tenant identity is
+      # derived from the hostname. Keep in sync with that alias list and
+      # Modules/Tenancy/database/seeders/TenantsSeeder.php. The legacy
+      # spacex.localhost alias is deliberately omitted: no seeded tenant
+      # sits behind it.
+      WARMUP_TENANT_HOSTS: "afya-clinic.localhost apple.localhost aquauno.localhost global-b2b.localhost harrawefarm.localhost lanouveil.localhost lms-demo.localhost nile-suites.localhost savory-lounge.localhost selam-bistro.localhost techive.localhost tesla.localhost"
+      WARMUP_REFRESH_SECONDS: "300"
+      # Probe the dev server this often, so a frontend restart is followed by a
+      # warm pass immediately instead of waiting for the next refresh.
+      WARMUP_PROBE_SECONDS: "10"
+      # The first route here is warmed across ALL tenant hosts before the second
+      # one starts, so a stop part-way through still leaves every tenant with its
+      # landing page instead of fully warming three tenants and missing nine.
+      WARMUP_TENANT_ROUTES: "/ /dashboard"
+      # Adaptive under load: a full pass is 29 requests and took 8.5 MINUTES on a
+      # saturated host, competing with the visitors it exists to serve. The pass
+      # warms the shared entry points first, then one route across every tenant,
+      # and stops once the 1-minute load average says the box is contended — a
+      # contended host gets the shared routes plus WARMUP_CONTENDED_REQUESTS
+      # tenants, a severely contended one gets WARMUP_MIN_ROUTES (default 2)
+      # shared routes only. Successive passes work through the tenants warmed
+      # longest ago, so a long busy spell still covers every tenant instead of
+      # re-warming the same two.
+      # Deferred routes are retried after WARMUP_BACKOFF_SECONDS rather than
+      # waiting out the refresh interval.
+      # See scripts/prewarm-frontend.mjs for the full contract.
+      WARMUP_LOAD_BACKOFF: "6"
+      WARMUP_CONTENDED_REQUESTS: "2"
+      WARMUP_BACKOFF_SECONDS: "60"
+      WARMUP_PROBE_BACKOFF_MS: "3000"
+    command: ["node", "/usr/local/bin/prewarm-frontend.mjs"]
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      # "Healthy" = the warming loop is turning: the script writes
+      # /tmp/warmup-heartbeat at the start of every pass and after every route,
+      # so a heartbeat older than 10 minutes means the loop is wedged.
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{process.exit(Date.now()-fs.statSync('/tmp/warmup-heartbeat').mtimeMs<600000?0:1)}catch(e){process.exit(1)}"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - hive-network
 
@@ -496,6 +684,15 @@ services:
       seaweedfs-bootstrap:
         condition: service_completed_successfully
     command: php artisan reverb:start --host=0.0.0.0 --port=9000
+    healthcheck:
+      # A real WebSocket upgrade on the Pusher path (/app/<key>): a 101 proves
+      # Reverb accepts live WS connections rather than merely holding the port
+      # open. The key is interpolated from the same variable the server uses.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' http://localhost:9000/app/${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8} | grep -q 101"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - hive-network
 
