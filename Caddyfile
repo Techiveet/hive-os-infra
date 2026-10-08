@@ -93,10 +93,33 @@
 	reverse_proxy hive-reverb:9000
 }
 
-hive-video.gulfingot.com {
+{$VIDEO_DOMAIN} {
 	import security
 	encode zstd gzip
 	reverse_proxy video-media:7880
+}
+
+# Addresses from before the move to techiveet.com. Old links, bookmarks and
+# cached bundles are sent on to the current domains. Requires *_DOMAIN to be
+# set to the new domains, or these collide with the blocks above.
+hive.gulfingot.com {
+	redir https://{$FRONTEND_DOMAIN}{uri} 308
+}
+
+hive-backend.gulfingot.com {
+	redir https://{$BACKEND_DOMAIN}{uri} 308
+}
+
+hive-ws.gulfingot.com {
+	redir https://{$REVERB_DOMAIN}{uri} 308
+}
+
+hive-queue.gulfingot.com {
+	redir https://{$HORIZON_DOMAIN}{uri} 308
+}
+
+hive-video.gulfingot.com {
+	redir https://{$VIDEO_DOMAIN}{uri} 308
 }
 
 {$HORIZON_DOMAIN} {
