@@ -29,6 +29,14 @@
 #
 # Environment overrides:
 #   COMPOSE_PROJECT_NAME   compose project name                (default: hive-os-infra)
+#   COMPOSE_FILE           whitespace-separated compose files passed with -f
+#                          (needed when the running stack was created from a
+#                          different file than the checkout's default
+#                          docker-compose.yml — e.g. Coolify's
+#                          docker-compose.prod.vps.yml)
+#   COMPOSE_ENV_FILE       env file passed with --env-file (Coolify writes the
+#                          stack's variables into a generated .env; without it
+#                          `docker compose config` fails on required vars)
 #   CORE_SERVICES          services that must be running       (default: the 18 core services)
 #   ONE_SHOT_SERVICES      services expected to exit 0         (default: seaweedfs-bootstrap)
 #   BACKEND_URL  FRONTEND_URL  ADMINER_URL  MAILPIT_URL  OLLAMA_URL
@@ -55,6 +63,17 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 STACK_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 PROJECT="${COMPOSE_PROJECT_NAME:-hive-os-infra}"
 COMPOSE=(docker compose -p "$PROJECT")
+# Address the same compose definition the running containers were created
+# from, not whatever docker-compose.yml happens to sit in the checkout: on the
+# Coolify host the stack is created from docker-compose.prod.vps.yml plus a
+# generated .env, and a bare `docker compose -p <project>` would parse the dev
+# file and fail its own preflight on the required variables.
+for _compose_file in ${COMPOSE_FILE:-}; do
+    COMPOSE+=(-f "$_compose_file")
+done
+if [[ -n "${COMPOSE_ENV_FILE:-}" ]]; then
+    COMPOSE+=(--env-file "$COMPOSE_ENV_FILE")
+fi
 
 # Services that make up a healthy local stack. gotenberg is profile-gated
 # (--profile docs), so it is listed explicitly rather than inferred.
@@ -62,16 +81,20 @@ CORE_SERVICES="${CORE_SERVICES:-backend backend-warmup frontend frontend-warmup 
 # Services that are supposed to run once, exit 0, and stop.
 ONE_SHOT_SERVICES="${ONE_SHOT_SERVICES:-seaweedfs-bootstrap}"
 
-BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8081}"
-FRONTEND_URL="${FRONTEND_URL:-http://127.0.0.1:3001}"
-ADMINER_URL="${ADMINER_URL:-http://127.0.0.1:8083}"
-MAILPIT_URL="${MAILPIT_URL:-http://127.0.0.1:8085}"
-OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
-SEAWEEDFS_MASTER_URL="${SEAWEEDFS_MASTER_URL:-http://127.0.0.1:9333}"
-SEAWEEDFS_FILER_URL="${SEAWEEDFS_FILER_URL:-http://127.0.0.1:8888}"
-SEAWEEDFS_S3_URL="${SEAWEEDFS_S3_URL:-http://127.0.0.1:8333}"
-REVERB_URL="${REVERB_URL:-http://127.0.0.1:9095}"
-LIVEKIT_URL="${LIVEKIT_URL:-http://127.0.0.1:17880}"
+# `${VAR-default}` (no colon) on purpose: an UNSET variable keeps its dev
+# default, but an explicitly EMPTY variable means "no host-reachable endpoint
+# on this deployment" (Coolify publishes no ports for these services) and
+# skips the HTTP check instead of falling back to an unreachable localhost.
+BACKEND_URL="${BACKEND_URL-http://127.0.0.1:8081}"
+FRONTEND_URL="${FRONTEND_URL-http://127.0.0.1:3001}"
+ADMINER_URL="${ADMINER_URL-http://127.0.0.1:8083}"
+MAILPIT_URL="${MAILPIT_URL-http://127.0.0.1:8085}"
+OLLAMA_URL="${OLLAMA_URL-http://127.0.0.1:11434}"
+SEAWEEDFS_MASTER_URL="${SEAWEEDFS_MASTER_URL-http://127.0.0.1:9333}"
+SEAWEEDFS_FILER_URL="${SEAWEEDFS_FILER_URL-http://127.0.0.1:8888}"
+SEAWEEDFS_S3_URL="${SEAWEEDFS_S3_URL-http://127.0.0.1:8333}"
+REVERB_URL="${REVERB_URL-http://127.0.0.1:9095}"
+LIVEKIT_URL="${LIVEKIT_URL-http://127.0.0.1:17880}"
 
 HTTP_TIMEOUT="${HTTP_TIMEOUT:-10}"
 HTTP_RETRIES="${HTTP_RETRIES:-3}"
@@ -162,6 +185,17 @@ cid_of() { "${COMPOSE[@]}" ps -aq "$1" 2>/dev/null | head -n 1; }
 check_http() { # name url expected_codes [timeout] [retries] [service]
     local name="$1" url="$2" expect="$3"
     local timeout="${4:-$HTTP_TIMEOUT}" retries="${5:-$HTTP_RETRIES}" svc="${6:-}"
+    # An empty base URL means "this endpoint has no host-reachable address
+    # here" (the Coolify stack publishes no ports for seaweedfs/reverb — they
+    # are reached through the proxy or in-container checks only). The call
+    # sites concatenate a path onto the base, so the result is never literally
+    # empty — detect the missing scheme instead. That is a deployment-profile
+    # difference, not a failure; the backing container and its exec checks
+    # still own the verdict.
+    if [[ -z "$url" || ! "$url" =~ ^https?:// ]]; then
+        warn "$name skipped — no host-reachable URL configured"
+        return
+    fi
     # The same script also guards the production stack, where several of the
     # dev stack's extras (adminer, mailpit, ollama, …) are not deployed. If the
     # endpoint's backing service has NO container at all, this is a profile
@@ -337,9 +371,22 @@ check_http "reverb" "$REVERB_URL/" "200,404" "$HTTP_TIMEOUT" "$HTTP_RETRIES" rev
 check_http "livekit (video-media)" "$LIVEKIT_URL/" "200" "$HTTP_TIMEOUT" "$HTTP_RETRIES" video-media
 check_http "ollama" "$OLLAMA_URL/" "200" "$HTTP_TIMEOUT" "$HTTP_RETRIES" ollama
 
-STATUS_BODY="$(curl -s --max-time "$HTTP_TIMEOUT" "$SEAWEEDFS_MASTER_URL/cluster/status" 2>/dev/null || true)"
+STATUS_BODY=""
+if [[ -n "$SEAWEEDFS_MASTER_URL" ]]; then
+    STATUS_BODY="$(curl -s --max-time "$HTTP_TIMEOUT" "$SEAWEEDFS_MASTER_URL/cluster/status" 2>/dev/null || true)"
+fi
 if [[ -z "$(cid_of seaweedfs)" ]]; then
     warn "seaweedfs leader skipped — service 'seaweedfs' is not deployed here"
+elif [[ -z "$SEAWEEDFS_MASTER_URL" ]]; then
+    # No host-reachable master URL (the Coolify stack publishes no SeaweedFS
+    # ports); probe the master from inside its own container instead — the
+    # image carries busybox wget, and the master listens on localhost:9333.
+    STATUS_BODY="$(docker exec "$(cid_of seaweedfs)" sh -c 'wget -qO- -T 5 http://127.0.0.1:9333/cluster/status' 2>&1)"
+    if grep -q '"IsLeader":true' <<<"$STATUS_BODY"; then
+        pass "seaweedfs master has an elected leader (checked in-container)"
+    else
+        fail "seaweedfs master has no leader — response: $(one_line "$STATUS_BODY")"
+    fi
 elif grep -q '"IsLeader":true' <<<"$STATUS_BODY"; then
     pass "seaweedfs master has an elected leader"
 else
