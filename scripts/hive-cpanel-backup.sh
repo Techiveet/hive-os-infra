@@ -66,11 +66,16 @@ restic "${restic_args[@]}" backup --host hive-production --tag hive-database-con
 # the app container must not kill the long object transfer. Credentials remain
 # in this root-only temporary env file and disappear with the staging directory.
 docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$backend" > "$stage/helper.env"
-network=$(docker inspect --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "$backend" | grep 'hive-network' | head -1)
-test -n "$network"
+docker inspect --format '{{range $k,$v := .NetworkSettings.Networks}}{{println $k}}{{end}}' "$backend" > "$stage/helper-networks"
+network="${app}_hive-network"
+grep -Fxq "$network" "$stage/helper-networks"
 image=$(docker inspect -f '{{.Image}}' "$backend")
 docker create --name "$helper" --label hive.backup-helper=true --network "$network" \
   --memory=384m --cpus=0.5 --env-file "$stage/helper.env" --entrypoint php "$image" /tmp/backup-s3-stream.php >/dev/null
+while IFS= read -r additional_network; do
+  test -n "$additional_network" || continue
+  if [ "$additional_network" != "$network" ]; then docker network connect "$additional_network" "$helper"; fi
+done < "$stage/helper-networks"
 docker cp /usr/local/lib/hive-backup/backup-s3-stream.php "$helper":/tmp/backup-s3-stream.php
 # pipefail makes a failed S3 read fail the complete run even if Restic receives EOF.
 docker start -a "$helper" | \

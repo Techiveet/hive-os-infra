@@ -3,9 +3,6 @@
 // A logical S3 archive avoids copying SeaweedFS's mutable database/index files.
 // No credentials, object names, or customer contents are written to stderr.
 declare(strict_types=1);
-require '/var/www/html/vendor/autoload.php';
-$app = require '/var/www/html/bootstrap/app.php';
-$app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
 
 function emitTarHeader(string $name, int $size): void
 {
@@ -21,16 +18,23 @@ function emitTarHeader(string $name, int $size): void
     echo $header;
 }
 
+$phase = 'bootstrap';
 try {
+    require '/var/www/html/vendor/autoload.php';
+    $app = require '/var/www/html/bootstrap/app.php';
+    $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
     $disk = Illuminate\Support\Facades\Storage::disk('s3');
     $client = $disk->getClient();
     $manifest = ['format' => 'hive-s3-logical-v1', 'started_at' => gmdate('c'), 'buckets' => [], 'objects' => []];
+    $phase = 'list_buckets';
     $buckets = array_column($client->listBuckets()['Buckets'] ?? [], 'Name');
     sort($buckets, SORT_STRING);
     foreach ($buckets as $bucket) {
         $manifest['buckets'][] = $bucket;
+        $phase = 'list_objects';
         foreach ($client->getPaginator('ListObjectsV2', ['Bucket' => $bucket]) as $page) {
             foreach ($page['Contents'] ?? [] as $object) {
+                $phase = 'read_object';
                 $result = $client->getObject(['Bucket' => $bucket, 'Key' => $object['Key'], 'IfMatch' => $object['ETag']]);
                 $size = (int) $result['ContentLength'];
                 $entry = 'objects/' . hash('sha256', $bucket . "\0" . $object['Key']);
@@ -58,6 +62,7 @@ try {
     emitTarHeader('manifest.json', strlen($json));
     echo $json, str_repeat("\0", (512 - (strlen($json) % 512)) % 512), str_repeat("\0", 1024);
 } catch (Throwable $error) {
-    fwrite(STDERR, "Hive object backup failed; inspect privately. No complete archive was confirmed.\n");
+    $status = $error instanceof Aws\Exception\AwsException ? ($error->getStatusCode() ?? 0) : 0;
+    fwrite(STDERR, "Hive object backup failed at {$phase}; class=" . get_class($error) . "; HTTP={$status}. No complete archive confirmed.\n");
     exit(1);
 }
