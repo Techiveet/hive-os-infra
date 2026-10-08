@@ -21,6 +21,7 @@
 // nothing. WARMER_CONTRACT_SCRIPTS in scripts/healthcheck.sh exists for that.
 import http from "node:http";
 import os from "node:os";
+import { readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -49,7 +50,7 @@ async function waitFor(predicate, timeoutMs, what) {
 // A frontend that records every request it is asked to serve, in order, and
 // answers after a scripted delay. Node's real http server is used (not a raw
 // socket) so keep-alive behaves exactly as it does against `next dev`.
-function startFake({ healthDelay = () => 0, delay = () => 10 }) {
+function startFake({ healthDelay = () => 0, delay = () => 10, refuseFor = {} }) {
   const state = { requests: [], pass: 0 };
 
   const server = http.createServer((req, res) => {
@@ -57,9 +58,14 @@ function startFake({ healthDelay = () => 0, delay = () => 10 }) {
     const host = req.headers.host ?? "";
     const wait = url === "/health" ? healthDelay() : delay(host, url);
     state.requests.push({ url, host, wait, pass: state.pass });
+    // Scripted 401s for the alert-hook cases: host -> true (refuse every
+    // warm request) or a pass count (refuse while the pass index is below
+    // it), so a case can walk the warmer through consecutive refusals and
+    // then a recovery — the broken-tenant lifecycle the marker file surfaces.
+    const refuse = refuseFor[host] !== undefined && (refuseFor[host] === true || state.pass < refuseFor[host]);
     setTimeout(() => {
-      res.writeHead(200, { "content-type": "text/html" });
-      res.end("<html><body>ok</body></html>");
+      res.writeHead(refuse ? 401 : 200, { "content-type": "text/html" });
+      res.end(refuse ? "Unauthorized" : "<html><body>ok</body></html>");
     }, wait);
   });
 
@@ -84,6 +90,11 @@ const labelOf = (port) => (request) =>
   request.host === `127.0.0.1:${port}` ? `shared ${request.url}` : `${request.host} ${request.url}`;
 
 async function runCase(testCase) {
+  // Fresh marker-file state per run: the alert cases point WARMUP_TENANT_ALERT_FILE
+  // at their own /tmp path, and a leftover marker from an earlier run would lie.
+  for (const check of testCase.expect.alertFile ?? []) {
+    try { unlinkSync(check.path); } catch { /* not there — fine */ }
+  }
   const fake = await startFake(testCase);
   const child = spawn(process.execPath, [WARMER], {
     env: {
@@ -120,13 +131,20 @@ async function runCase(testCase) {
     await waitFor(
       () => {
         pump();
-        return passesSeen >= (testCase.passes ?? 1);
+        // When waitForLog is set it is the ONLY finish condition; the pass
+        // fallback would otherwise kill the child mid-scenario.
+        return testCase.waitForLog ? output.includes(testCase.waitForLog) : passesSeen >= (testCase.passes ?? 1);
       },
       25000,
-      `${testCase.passes ?? 1} warm pass summary line(s)`,
+      testCase.waitForLog ? `log line ${JSON.stringify(testCase.waitForLog)}` : `${testCase.passes ?? 1} warm pass summary line(s)`,
     );
     // Let the pass finish writing the rest of its output.
     await sleep(300);
+  } catch (error) {
+    // Surface what the child actually did before the wait gave up.
+    throw new Error(
+      `${error.message}\n      child output tail:\n${output.split("\n").slice(-12).map((l) => `        ${l}`).join("\n")}`,
+    );
   } finally {
     child.kill("SIGTERM");
     await new Promise((done) => child.once("exit", done));
@@ -168,6 +186,33 @@ async function runCase(testCase) {
 
   for (const needle of testCase.expect.logExcludes ?? []) {
     if (output.includes(needle)) problems.push(`log unexpectedly included ${JSON.stringify(needle)}`);
+  }
+
+  // The alert hook's observable output is a marker file in the warmer's own
+  // filesystem (the same /tmp — the harness runs the real warmer as a child
+  // process), asserted here after the child is gone.
+  for (const check of testCase.expect.alertFile ?? []) {
+    let content = null;
+    try {
+      content = readFileSync(check.path, "utf8");
+    } catch {
+      /* absent */
+    }
+    if (check.absent) {
+      if (content !== null) {
+        problems.push(`alert file ${check.path} unexpectedly exists: ${JSON.stringify(content)}`);
+      }
+    } else if (content === null) {
+      problems.push(`expected alert file ${check.path}, saw none`);
+    } else {
+      for (const needle of check.includes ?? []) {
+        if (!content.includes(needle)) problems.push(`alert file missing ${JSON.stringify(needle)}: ${JSON.stringify(content)}`);
+      }
+      for (const needle of check.excludes ?? []) {
+        if (content.includes(needle)) problems.push(`alert file unexpectedly includes ${JSON.stringify(needle)}`);
+      }
+    }
+    try { unlinkSync(check.path); } catch { /* already gone */ }
   }
 
   return { name: testCase.name, problems, output, labels };
@@ -283,6 +328,45 @@ const cases = [
       count: ROUTES.length + CONTENDED_SLICE,
       order: SHARED_THEN_BREADTH.slice(0, ROUTES.length + CONTENDED_SLICE),
       logIncludes: ["host contended (probe ", "backed off (probe "],
+    },
+  },
+  {
+    // The alert hook: 401s across passes must end up in the marker file the
+    // healthcheck surfaces. Pass cadence depends on cold detection and refresh
+    // timing, so the finish is pinned to the ALERT log line, not a pass count.
+    name: "alert hook: consecutive tenant 401s write the marker file with the host",
+    refuseFor: { "a.localhost": true },
+    waitForLog: "tenant warm ALERT: a.localhost has now answered 2 auth refusals",
+    env: {
+      WARMUP_REFRESH_SECONDS: "2",
+      WARMUP_TENANT_ALERT_THRESHOLD: "2",
+      WARMUP_TENANT_ALERT_FILE: "/tmp/prewarm-frontend-harness-alert-write",
+    },
+    expect: {
+      logIncludes: ["tenant warm ALERT: a.localhost has now answered 2 auth refusals (401/403) in a row"],
+      logExcludes: ["alert cleared"],
+      alertFile: [
+        {
+          path: "/tmp/prewarm-frontend-harness-alert-write",
+          includes: ["a.localhost", "2 consecutive tenant warm 401/403s"],
+          excludes: ["b.localhost", "c.localhost"],
+        },
+      ],
+    },
+  },
+  {
+    name: "alert hook: a later clean warm clears the marker",
+    // Refuse pass 0 and pass 1, then answer 200 from pass 2 on.
+    refuseFor: { "a.localhost": 2 },
+    waitForLog: "tenant warm alert cleared: a.localhost answered",
+    env: {
+      WARMUP_REFRESH_SECONDS: "2",
+      WARMUP_TENANT_ALERT_THRESHOLD: "2",
+      WARMUP_TENANT_ALERT_FILE: "/tmp/prewarm-frontend-harness-alert-clear",
+    },
+    expect: {
+      logIncludes: ["tenant warm ALERT: a.localhost has now answered 2 auth refusals"],
+      alertFile: [{ path: "/tmp/prewarm-frontend-harness-alert-clear", absent: true }],
     },
   },
 ].filter(Boolean);

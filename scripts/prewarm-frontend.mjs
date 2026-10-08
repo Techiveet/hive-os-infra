@@ -103,7 +103,7 @@
 // the pass for that would strand the warming exactly when it is needed.
 import http from "node:http";
 import os from "node:os";
-import { writeFileSync } from "node:fs";
+import { unlinkSync, writeFileSync } from "node:fs";
 
 const HEARTBEAT = "/tmp/warmup-heartbeat";
 const BASE_URL = new URL(process.env.WARMUP_BASE_URL ?? "http://frontend:3000");
@@ -128,6 +128,19 @@ const CONTENDED_TENANT_REQUESTS = count("WARMUP_CONTENDED_REQUESTS", 2);
 // read in seconds despite the name.
 const PROBE_BACKOFF_MS = number("WARMUP_PROBE_BACKOFF_MS", 3000);
 const BACKOFF_MS = seconds("WARMUP_BACKOFF_SECONDS", 60) * 1000;
+// The alert hook: the frontend has no logins, so its anomalous tenant signal is
+// a warm request answering 401/403 — every configured tenant host answers 200
+// on the shared routes even for hosts that do not exist (verified by probe),
+// so an auth refusal means the request is NOT being served anonymously:
+// broken middleware, tenant resolution, or route config. After
+// TENANT_ALERT_THRESHOLD consecutive refusals for one host (across passes) the
+// failures go to TENANT_ALERT_FILE for the stack healthcheck to surface as a
+// WARNING; the marker clears itself the moment that host warms cleanly again.
+// 0 disables the hook.
+const TENANT_ALERT_THRESHOLD = count("WARMUP_TENANT_ALERT_THRESHOLD", 3);
+// Overridable so the contract harness can point each case at its own marker.
+const TENANT_ALERT_FILE =
+  process.env.WARMUP_TENANT_ALERT_FILE ?? "/tmp/warmup-alert";
 
 function list(name, fallback) {
   const raw = process.env[name];
@@ -260,6 +273,51 @@ const taskKey = (task) => `${task.host ?? "-"} ${task.path}`;
 // pass. Ordering by need makes every constrained pass advance coverage instead.
 const lastWarmedAt = new Map();
 
+// Consecutive 401/403 warm answers per tenant host — the frontend alert hook's
+// counter, same semantics as the backend warmer's login401s.
+const authRefusals = new Map(); // host -> count
+
+// One marker file, one line per tenant host currently failing. REWRITTEN — not
+// appended — after every tenant warm request, so a recovered host disappears
+// from it the moment it answers 200 again. A host dropped from
+// WARMUP_TENANT_HOSTS keeps its line until the file is cleared by hand:
+// a removed-but-broken tenant should not vanish silently either.
+function rewriteTenantAlerts() {
+  const lines = [];
+  for (const [host, refusals] of authRefusals) {
+    if (TENANT_ALERT_THRESHOLD > 0 && refusals >= TENANT_ALERT_THRESHOLD) {
+      lines.push(`${new Date().toISOString()} ${host}: ${refusals} consecutive tenant warm 401/403s`);
+    }
+  }
+  try {
+    if (!lines.length) {
+      unlinkSync(TENANT_ALERT_FILE);
+    } else {
+      writeFileSync(TENANT_ALERT_FILE, `${lines.join("\n")}\n`);
+    }
+  } catch {
+    /* best effort: an unwritable alert file must never break warming */
+  }
+}
+
+// Called after every tenant warm request. A 401/403 counts toward the alert;
+// anything else (including transport failure — that is a different alarm, and
+// the probe loop already owns it) resets the streak.
+function noteTenantAuthResult(host, status) {
+  if (!TENANT_ALERT_THRESHOLD) return;
+  const refused = status === 401 || status === 403;
+  const previous = authRefusals.get(host) ?? 0;
+  if (refused) authRefusals.set(host, previous + 1);
+  else authRefusals.delete(host);
+  if (refused && previous + 1 === TENANT_ALERT_THRESHOLD) {
+    log(`tenant warm ALERT: ${host} has now answered ${previous + 1} auth refusals (401/403) in a row — marker written to ${TENANT_ALERT_FILE}`);
+  }
+  if (!refused && previous > 0) {
+    log(`tenant warm alert cleared: ${host} answered ${status} after ${previous} refusal(s)`);
+  }
+  rewriteTenantAlerts();
+}
+
 // The queue, in the order to warm it. Tier 0 is the shared entry points, in the
 // order they were configured — that order IS the value ranking, and these are
 // also the cheapest to keep warm, being what every visitor hits and what real
@@ -305,13 +363,14 @@ async function warmRoute(path, host) {
   heartbeat();
 
   if (result.status === 0) {
-    return { ok: false, ms: result.ms, text: `${path} FAILED after ${(result.ms / 1000).toFixed(1)}s (${result.error})` };
+    return { ok: false, status: 0, ms: result.ms, text: `${path} FAILED after ${(result.ms / 1000).toFixed(1)}s (${result.error})` };
   }
 
   const elapsed = (result.ms / 1000).toFixed(1);
   const slow = result.ms >= COLD_THRESHOLD_MS;
   return {
     ok: result.status < 400,
+    status: result.status,
     slow,
     ms: result.ms,
     text: `${path} ${result.status} in ${elapsed}s${slow ? " (slow)" : ""}`,
@@ -378,6 +437,8 @@ async function warmPass(reason) {
     // Recorded on any attempt, so a route that answers slowly or fails is not
     // retried ahead of the ones that have been waiting longer.
     lastWarmedAt.set(taskKey(task), Date.now());
+    // Tenant tasks only: the alert hook tracks auth refusals per tenant host.
+    if (task.host) noteTenantAuthResult(task.host, result.status);
     if (result.slow) slow += 1;
     if (!result.ok) failures += 1;
     warmed += 1;
@@ -406,7 +467,10 @@ heartbeat();
 log(
   `prewarming ${BASE_URL.origin} — shared: ${ROUTES.join(" ")}` +
     (TENANT_HOSTS.length ? ` — tenants: ${TENANT_HOSTS.join(" ")} (${TENANT_ROUTES.join(" ")})` : " — no tenant hosts configured") +
-    ` — refresh every ${REFRESH_MS / 1000}s, backing off above load ${LOAD_BACKOFF} (${CPU_COUNT} cpu)`,
+    ` — refresh every ${REFRESH_MS / 1000}s, backing off above load ${LOAD_BACKOFF} (${CPU_COUNT} cpu)` +
+    (TENANT_HOSTS.length
+      ? ` — tenant alert hook: ${TENANT_ALERT_THRESHOLD || "disabled"} consecutive warm 401/403(s) per host -> ${TENANT_ALERT_FILE}`
+      : ""),
 );
 // The loop watches the dev server rather than only sleeping between
 // refreshes. A frontend restart rebuilds the Next dev cache (see

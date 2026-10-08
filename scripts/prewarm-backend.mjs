@@ -188,7 +188,7 @@
 
 import http from "node:http";
 import os from "node:os";
-import { writeFileSync } from "node:fs";
+import { writeFileSync, unlinkSync } from "node:fs";
 
 const HEARTBEAT = "/tmp/backend-warmup-heartbeat";
 
@@ -229,6 +229,16 @@ const TENANT_PROBE_BACKOFF_MS = number("WARMUP_TENANT_PROBE_BACKOFF_MS", 3000);
 const TENANT_BACKOFF_MS = seconds("WARMUP_TENANT_BACKOFF_SECONDS", 60) * 1000;
 const TENANT_LOGIN_COOLDOWN_MS =
   seconds("WARMUP_TENANT_LOGIN_COOLDOWN_SECONDS", 240) * 1000;
+// The alert hook: a tenant whose login 401s this many times IN A ROW (attempts
+// are already cooldown-gated, so this spans multiple passes) has broken
+// credentials or a deleted user — warming cannot fix that, and a per-pass log
+// line scrolls away. The failures go to TENANT_ALERT_FILE for the stack
+// healthcheck to surface as a WARNING; the marker clears itself the moment a
+// login for that host succeeds. 0 disables the hook.
+const TENANT_ALERT_THRESHOLD = count("WARMUP_TENANT_ALERT_THRESHOLD", 3);
+// Overridable so the contract harness can point each case at its own marker.
+const TENANT_ALERT_FILE =
+  process.env.WARMUP_TENANT_ALERT_FILE ?? "/tmp/backend-warmup-alert";
 
 // Per-host credential overrides: "host=email:password,host2=email:password".
 const TENANT_OVERRIDES = parseOverrides(process.env.WARMUP_TENANT_OVERRIDES ?? "");
@@ -456,10 +466,35 @@ const tenants = new Map(); // host -> { token, lastLoginAttempt, lastWarmedAt: M
 function tenantState(host) {
   let state = tenants.get(host);
   if (!state) {
-    state = { token: "", lastLoginAttempt: 0, lastWarmedAt: new Map() };
+    state = { token: "", lastLoginAttempt: 0, lastWarmedAt: new Map(), login401s: 0 };
     tenants.set(host, state);
   }
   return state;
+}
+
+// One marker file, one line per tenant currently failing. REWRITTEN — not
+// appended — after every tenant login attempt, so a recovered tenant
+// disappears from it the moment it signs in. A tenant dropped from
+// WARMUP_TENANT_HOSTS keeps its line until the file is cleared by hand:
+// a removed-but-broken tenant should not vanish silently either.
+function rewriteTenantAlerts() {
+  const lines = [];
+  for (const [host, st] of tenants) {
+    if (TENANT_ALERT_THRESHOLD > 0 && st.login401s >= TENANT_ALERT_THRESHOLD) {
+      lines.push(
+        `${new Date().toISOString()} ${host} ${tenantCredentials(host).email}: ${st.login401s} consecutive tenant-login 401s`,
+      );
+    }
+  }
+  try {
+    if (!lines.length) {
+      unlinkSync(TENANT_ALERT_FILE);
+    } else {
+      writeFileSync(TENANT_ALERT_FILE, `${lines.join("\n")}\n`);
+    }
+  } catch {
+    /* best effort: an unwritable alert file must never break warming */
+  }
 }
 
 // Logs one tenant's admin in under that tenant's Host. The host decides BOTH
@@ -494,6 +529,11 @@ async function tenantLogin(host, reason) {
   const token_ = result.json?.data?.token;
   if (result.status >= 200 && result.status < 300 && token_) {
     state.token = token_;
+    if (state.login401s > 0) {
+      log(`tenant login alert cleared: ${host} signed in after ${state.login401s} consecutive 401(s)`);
+    }
+    state.login401s = 0;
+    rewriteTenantAlerts();
     log(`tenant login ${host} (${reason}) succeeded in ${(result.ms / 1000).toFixed(1)}s`);
     return true;
   }
@@ -501,10 +541,15 @@ async function tenantLogin(host, reason) {
   if (result.status === 423) {
     log(`tenant login ${host} refused: temporarily locked (429/423). Trying again after the cooldown.`);
   } else if (result.status === 401) {
+    state.login401s += 1;
     log(`tenant login ${host} refused: ${email} rejected with 401. Check WARMUP_TENANT_EMAIL_SUFFIX / WARMUP_TENANT_OVERRIDES (see TenantUsersSeeder for who gets what).`);
+    if (state.login401s === TENANT_ALERT_THRESHOLD) {
+      log(`tenant login ALERT: ${host} has now failed ${state.login401s} logins in a row with 401 — marker written to ${TENANT_ALERT_FILE}`);
+    }
   } else {
     log(`tenant login ${host} unexpected status ${result.status}: ${result.text.slice(0, 200)}`);
   }
+  rewriteTenantAlerts();
   return false;
 }
 
@@ -756,6 +801,9 @@ if (TENANT_HOSTS.length) {
   );
   const overrides = [...TENANT_OVERRIDES.keys()];
   if (overrides.length) log(`tenant credential overrides for: ${overrides.join(", ")}`);
+  log(
+    `tenant alert hook: ${TENANT_ALERT_THRESHOLD || "disabled"} consecutive login 401(s) per tenant -> ${TENANT_ALERT_FILE}`,
+  );
 } else {
   log("tenant tier: disabled (no WARMUP_TENANT_HOSTS configured)");
 }

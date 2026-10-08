@@ -28,6 +28,7 @@
 // that reason.
 import http from "node:http";
 import os from "node:os";
+import { readFileSync, unlinkSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -63,7 +64,7 @@ async function waitFor(predicate, timeoutMs, what) {
 // tenant logins (stable serial), a single serial for central. No 401 is ever
 // emitted, so every login succeeds exactly once per host unless a case proves
 // otherwise through the login counts.
-function startFake({ delay = () => 10 } = {}) {
+function startFake({ delay = () => 10, failLoginsFor = {} } = {}) {
   const state = { requests: [], tokens: new Map(), emails: [], nextToken: 1, pass: 0 };
 
   const server = http.createServer((req, res) => {
@@ -98,13 +99,6 @@ function startFake({ delay = () => 10 } = {}) {
         respond(200, { message: "ok", data: { token: `central-token-${serial}` } });
         return;
       }
-      if (isCentralLogin) {
-        const serial = state.nextToken++;
-        state.tokens.set("central", serial);
-        state.tokens.set("central#count", (state.tokens.get("central#count") ?? 0) + 1);
-        respond(200, { message: "ok", data: { token: `central-token-${serial}` } });
-        return;
-      }
       if (isTenantLogin) {
         // Who is logging in: recorded, so a case can assert the warmer's
         // email mapping (admin@<tenant-id>.com by default, overrides for the
@@ -113,6 +107,16 @@ function startFake({ delay = () => 10 } = {}) {
           state.emails.push({ host, email: String(JSON.parse(body).email ?? "") });
         } catch {
           state.emails.push({ host, email: "(unparseable)" });
+        }
+        // Scripted 401s for the alert-hook cases: host -> true (fail every
+        // login) or a pass count (fail while the pass index is below it), so a
+        // case can walk the warmer through consecutive failures and then a
+        // recovery — exactly the "broken credentials" lifecycle the marker
+        // file exists to surface.
+        const failRule = failLoginsFor[host];
+        if (failRule !== undefined && (failRule === true || state.pass < failRule)) {
+          respond(401, { message: "Invalid credentials." });
+          return;
         }
         const count = state.tokens.get(`${host}#count`) ?? 0;
         state.tokens.set(`${host}#count`, count + 1);
@@ -154,6 +158,11 @@ const isTenantWarm = (request) => request.host.endsWith(".localhost") && request
 const isTenantLogin = (request) => request.host.endsWith(".localhost") && request.url === LOGIN_PATH;
 
 async function runCase(testCase) {
+  // Fresh marker-file state per run: the alert cases point WARMUP_TENANT_ALERT_FILE
+  // at their own /tmp path, and a leftover marker from an earlier run would lie.
+  for (const check of testCase.expect.alertFile ?? []) {
+    try { unlinkSync(check.path); } catch { /* not there — fine */ }
+  }
   const fake = await startFake(testCase);
   const child = spawn(process.execPath, [WARMER], {
     env: {
@@ -193,13 +202,28 @@ async function runCase(testCase) {
     await waitFor(
       () => {
         pump();
-        return passesSeen >= (testCase.passes ?? 1);
+        // A case may pin its finish to a log line (the alert hook fires at an
+        // exact threshold) instead of a pass count — pass cadence depends on
+        // cold-worker detection and refresh timing, a pass count does not.
+        // When waitForLog is set it is the ONLY finish condition; the pass
+        // fallback would otherwise kill the child mid-scenario.
+        return testCase.waitForLog
+          ? output.includes(testCase.waitForLog)
+          : passesSeen >= (testCase.passes ?? 1);
       },
       25000,
-      `${testCase.passes ?? 1} pass summary line(s)`,
+      testCase.waitForLog
+        ? `log line ${JSON.stringify(testCase.waitForLog)} (or a pass summary)`
+        : `${testCase.passes ?? 1} pass summary line(s)`,
     );
     // Let the pass finish writing its summary before the process is killed.
     await sleep(300);
+  } catch (error) {
+    // Surface what the child actually did before the wait gave up — a hanging
+    // pass is otherwise invisible (the last summary line says where it stalled).
+    throw new Error(
+      `${error.message}\n      child output tail:\n${output.split("\n").slice(-15).map((l) => `        ${l}`).join("\n")}`,
+    );
   } finally {
     child.kill("SIGTERM");
     await new Promise((done) => child.once("exit", done));
@@ -290,6 +314,37 @@ async function runCase(testCase) {
         `tenant slice of pass ${passIndex + 1} mismatch\n      expected: ${expected.join(" | ")}\n      actual:   ${actual.join(" | ")}`,
       );
     }
+  }
+
+  // The alert hook's observable output is a marker file in the warmer's own
+  // filesystem (the same /tmp — the harness runs the real warmer as a child
+  // process), asserted here after the child is gone.
+  for (const check of testCase.expect.alertFile ?? []) {
+    let content = null;
+    try {
+      content = readFileSync(check.path, "utf8");
+    } catch {
+      /* absent */
+    }
+    if (check.absent) {
+      if (content !== null) {
+        problems.push(`alert file ${check.path} unexpectedly exists: ${JSON.stringify(content)}`);
+      }
+    } else if (content === null) {
+      problems.push(`expected alert file ${check.path}, saw none`);
+    } else {
+      for (const needle of check.includes ?? []) {
+        if (!content.includes(needle)) {
+          problems.push(`alert file missing ${JSON.stringify(needle)}: ${JSON.stringify(content)}`);
+        }
+      }
+      for (const needle of check.excludes ?? []) {
+        if (content.includes(needle)) {
+          problems.push(`alert file unexpectedly includes ${JSON.stringify(needle)}`);
+        }
+      }
+    }
+    try { unlinkSync(check.path); } catch { /* already gone */ }
   }
 
   return { name: testCase.name, problems, output, labels };
@@ -464,6 +519,65 @@ const cases = [
       // tenant login line anywhere (skip-auth skips the login AND the tier).
       logIncludes: ["tenants 0 of 6"],
       logExcludes: ["tenant login", "refused", "POST /api/v1/login"],
+    },
+  },
+  {
+    // The alert hook: repeated 401s across passes must end up in the marker
+    // file the healthcheck surfaces. Each pass is stretched past the 1s login
+    // cooldown (delay 250ms, sequential tenant tier) so the second pass really
+    // re-attempts the login rather than being gated off.
+    name: "alert hook: two consecutive 401s write the marker file with host and email",
+    delay: () => 250,
+    waitForLog: "tenant login ALERT: a.localhost has now failed 2 logins in a row with 401",
+    failLoginsFor: { "a.localhost": true },
+    env: {
+      // Passes recur on the refresh cadence here (no deferrals to force 2s
+      // retries like the contention cases), so shorten it.
+      WARMUP_REFRESH_SECONDS: "2",
+      WARMUP_TENANT_LOGIN_COOLDOWN_SECONDS: "1",
+      WARMUP_TENANT_ALERT_THRESHOLD: "2",
+      WARMUP_TENANT_ALERT_FILE: "/tmp/prewarm-harness-alert-write",
+    },
+    expect: {
+      loginsAs: [{ host: "a.localhost", email: "admin@a.com" }],
+      loginCounts: [
+        { host: "a.localhost", min: 2, max: 3 },
+        { host: "b.localhost", min: 1, max: 1 },
+      ],
+      logIncludes: ["tenant login ALERT: a.localhost has now failed 2 logins in a row with 401"],
+      logExcludes: ["alert cleared"],
+      alertFile: [
+        {
+          path: "/tmp/prewarm-harness-alert-write",
+          includes: ["a.localhost", "admin@a.com", "2 consecutive tenant-login 401s"],
+          excludes: ["b.localhost", "c.localhost"],
+        },
+      ],
+    },
+  },
+  {
+    name: "alert hook: a later successful login clears the marker",
+    delay: () => 250,
+    // Fail the logins of the first passes, then let a later pass sign in.
+    // The cleared-line count depends on how many failing passes the refresh
+    // cadence squeezes in, so pin to the stable prefix.
+    waitForLog: "tenant login alert cleared: a.localhost signed in after",
+    // Fail the logins of passes 0 and 1, then let pass 2 sign in.
+    failLoginsFor: { "a.localhost": 2 },
+    env: {
+      WARMUP_REFRESH_SECONDS: "2",
+      WARMUP_TENANT_LOGIN_COOLDOWN_SECONDS: "1",
+      WARMUP_TENANT_ALERT_THRESHOLD: "2",
+      WARMUP_TENANT_ALERT_FILE: "/tmp/prewarm-harness-alert-clear",
+    },
+    expect: {
+      loginsAs: [{ host: "a.localhost", email: "admin@a.com" }],
+      loginCounts: [{ host: "a.localhost", min: 3, max: 4 }],
+      logIncludes: [
+        "tenant login ALERT: a.localhost has now failed 2 logins in a row with 401",
+        "tenant login alert cleared: a.localhost signed in after",
+      ],
+      alertFile: [{ path: "/tmp/prewarm-harness-alert-clear", absent: true }],
     },
   },
 ].filter(Boolean);
