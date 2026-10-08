@@ -497,6 +497,39 @@ else
     fi
 fi
 
+# --- warmer alert markers -----------------------------------------------------
+# The warmers write a marker file when a tenant keeps refusing to warm —
+# repeated tenant-login 401s on the backend (broken credentials, deleted user,
+# wrong WARMUP_TENANT_OVERRIDES), repeated 401/403 warm answers on the frontend
+# (broken middleware or tenant resolution; every valid host answers 200). That
+# is a WARNING, not a failure: the stack itself is healthy, but one tenant is
+# not being kept warm and will serve cold until the credential/config problem
+# is fixed. Both files self-clear the moment the tenant answers again, so a
+# warning here reflects the problem's current presence, not its history.
+section "Warmer alert markers"
+
+check_warmup_marker() { # name service marker_file
+    local name="$1" svc="$2" file="$3"
+    local cid out
+    cid="$(cid_of "$svc")"
+    if [[ -z "$cid" ]]; then
+        # Same profile rule as check_exec: a service that is not deployed here
+        # at all cannot fail this stack's checks (the Containers section owns
+        # the required-set verdict).
+        warn "$name skipped — service '$svc' is not deployed here"
+        return
+    fi
+    if docker exec "$cid" test -f "$file" 2>/dev/null; then
+        out="$(docker exec "$cid" cat "$file" 2>&1)" || out="(unreadable)"
+        warn "$name — $(one_line "$out")"
+    else
+        pass "$name (no marker)"
+    fi
+}
+
+check_warmup_marker "backend warmup tenant-login alert" backend-warmup /tmp/backend-warmup-alert
+check_warmup_marker "frontend warmup tenant-auth alert" frontend-warmup /tmp/warmup-alert
+
 # --- summary -----------------------------------------------------------------
 printf '\n%s\n' "────────────────────────────────────────────────────────────"
 printf 'checks: %d passed, %d failed, %d warning(s)\n' "$PASSED" "$FAILED" "$WARNED"
