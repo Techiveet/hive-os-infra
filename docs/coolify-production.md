@@ -28,6 +28,15 @@ These host directories hold customer data and must never be removed:
 
 ## Compose rules that Coolify enforces
 
+- Enable **Preserve Repository** in the application's Advanced settings.
+  The monitoring configuration and Alertmanager renderer are Git-backed bind
+  mounts. Without preservation, Docker creates missing file sources as empty
+  directories and deployment fails with a file/directory mount mismatch.
+  Never edit those generated copies as the source of truth: change the files
+  in this repository and deploy. Keep customer data outside the Git checkout.
+- Redis is pinned to the compatible Redis 8.10.2 digest. Its production data
+  uses RDB format 15; Redis 8.8 cannot read it. Never downgrade Redis or delete
+  its AOF/RDB to make a deployment pass. Back up and test a copy first.
 - Coolify attaches every service to its own network as well as the ones
   declared here, so a container can have several IPs. Services must listen on
   all interfaces (see the SeaweedFS `-ip.bind=0.0.0.0` flag).
