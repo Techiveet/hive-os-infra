@@ -17,6 +17,11 @@ services:
     image: postgres:17-alpine
     container_name: hive-db
     restart: unless-stopped
+    # RefreshDatabase drops every table in one statement, which takes a lock
+    # per table, index and sequence. The default of 64 runs out of shared
+    # memory ("increase max_locks_per_transaction") once the module schema
+    # grows, failing every Hospitality suite in CI.
+    command: ["postgres", "-c", "max_locks_per_transaction=512"]
     ports:
       - "127.0.0.1:5439:5432"
     environment:
