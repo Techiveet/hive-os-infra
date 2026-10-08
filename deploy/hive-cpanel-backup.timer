@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Hive OS encrypted offsite backup
+
+[Timer]
+OnCalendar=*-*-* 01:30:00 UTC
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

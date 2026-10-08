@@ -8,6 +8,7 @@
 #   ALERT_SMTP_USERNAME   optional
 #   ALERT_SMTP_PASSWORD   optional
 #   ALERT_WEBHOOK_URL     optional; receives Alertmanager's JSON payload
+#   ALERT_TELEGRAM_BOT_TOKEN and ALERT_TELEGRAM_CHAT_ID optional; native Telegram
 #
 # With none of them set, alerts are still evaluated and visible in the
 # Alertmanager UI, but nobody is notified; the container logs a warning.
@@ -16,14 +17,24 @@ set -eu
 config=/tmp/alertmanager.yml
 receiver_body=""
 
+# YAML single-quoted values escape apostrophes by doubling them. Reject line
+# breaks so a malformed secret cannot create additional configuration fields.
+yaml_value() {
+  if [ "$(printf '%s' "$1" | tr -d '\r\n')" != "$1" ]; then
+    echo "alertmanager: multiline receiver values are not supported" >&2
+    exit 1
+  fi
+  printf '%s' "$1" | sed "s/'/''/g"
+}
+
 if [ -n "${ALERT_EMAIL_TO:-}" ] && [ -n "${ALERT_SMTP_HOST:-}" ] && [ -n "${ALERT_SMTP_FROM:-}" ]; then
   receiver_body="${receiver_body}
     email_configs:
-      - to: '${ALERT_EMAIL_TO}'
-        from: '${ALERT_SMTP_FROM}'
-        smarthost: '${ALERT_SMTP_HOST}'
-        auth_username: '${ALERT_SMTP_USERNAME:-}'
-        auth_password: '${ALERT_SMTP_PASSWORD:-}'
+      - to: '$(yaml_value "${ALERT_EMAIL_TO}")'
+        from: '$(yaml_value "${ALERT_SMTP_FROM}")'
+        smarthost: '$(yaml_value "${ALERT_SMTP_HOST}")'
+        auth_username: '$(yaml_value "${ALERT_SMTP_USERNAME:-}")'
+        auth_password: '$(yaml_value "${ALERT_SMTP_PASSWORD:-}")'
         require_tls: true
         send_resolved: true"
 fi
@@ -31,12 +42,26 @@ fi
 if [ -n "${ALERT_WEBHOOK_URL:-}" ]; then
   receiver_body="${receiver_body}
     webhook_configs:
-      - url: '${ALERT_WEBHOOK_URL}'
+      - url: '$(yaml_value "${ALERT_WEBHOOK_URL}")'
         send_resolved: true"
 fi
 
+if [ -n "${ALERT_TELEGRAM_BOT_TOKEN:-}" ] || [ -n "${ALERT_TELEGRAM_CHAT_ID:-}" ]; then
+  if [ -z "${ALERT_TELEGRAM_BOT_TOKEN:-}" ] || ! printf '%s' "${ALERT_TELEGRAM_CHAT_ID:-}" | grep -Eq '^-?[0-9]+$'; then
+    echo "alertmanager: Telegram requires both a bot token and a numeric chat ID" >&2
+    exit 1
+  fi
+  receiver_body="${receiver_body}
+    telegram_configs:
+      - bot_token: '$(yaml_value "${ALERT_TELEGRAM_BOT_TOKEN}")'
+        chat_id: ${ALERT_TELEGRAM_CHAT_ID}
+        send_resolved: true
+        parse_mode: ''
+        message: 'Hive OS: {{ .Status }}{{ range .Alerts }} | {{ .Labels.alertname }}: {{ .Annotations.summary }}{{ end }}'"
+fi
+
 if [ -z "$receiver_body" ]; then
-  echo "alertmanager: WARNING no ALERT_EMAIL_TO/ALERT_SMTP_* or ALERT_WEBHOOK_URL set; alerts will not be delivered." >&2
+  echo "alertmanager: WARNING no email, webhook, or Telegram receiver set; alerts will not be delivered." >&2
 fi
 
 cat > "$config" <<YAML

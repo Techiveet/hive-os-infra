@@ -1,4 +1,48 @@
 groups:
+  - name: hive_host_capacity_alerts
+    rules:
+      - alert: HiveHostDiskHigh
+        expr: 1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} > 0.80
+        for: 15m
+        labels:
+          severity: warning
+          service: host
+          environment: production
+        annotations:
+          summary: "Hive OS host disk exceeds 80% usage"
+          description: "Review safe build cache cleanup and capacity. Never prune customer volumes or rollback backups."
+      - alert: HiveHostDiskCritical
+        expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} < 3221225472
+        for: 5m
+        labels:
+          severity: critical
+          service: host
+          environment: production
+        annotations:
+          summary: "Hive OS host has less than 3 GiB disk available"
+          description: "Escalate capacity immediately; do not reset databases or delete object storage."
+  - name: hive_offsite_backup_alerts
+    rules:
+      - alert: HiveOffsiteBackupFailed
+        expr: hive_offsite_backup_last_run_success == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: backup
+          environment: production
+        annotations:
+          summary: "Hive OS encrypted cPanel backup failed"
+          description: "Inspect hive-cpanel-backup.service and its private diagnostics; do not reset production data."
+      - alert: HiveOffsiteBackupStale
+        expr: time() - hive_offsite_backup_last_success_timestamp_seconds > 108000 or absent(hive_offsite_backup_last_success_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: critical
+          service: backup
+          environment: production
+        annotations:
+          summary: "Hive OS offsite backup is missing or older than 30 hours"
+          description: "Check cPanel connectivity, the systemd backup timer, and the last successful repository snapshot."
   # ==========================================
   # 1. Application Performance & Error Alerts
   # ==========================================

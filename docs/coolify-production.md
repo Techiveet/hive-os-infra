@@ -131,6 +131,11 @@ For Hive itself:
 - `db-backup-offsite` mirrors that directory to `BACKUP_REMOTE_*`. Until those
   are set it logs a warning and backups exist only on this server. Use a
   private bucket with server-side encryption, outside Hetzner.
+- The current production SFTP alternative is the encrypted host-side cPanel
+  Restic job, **not** that optional S3 mirror. See
+  [cPanel offsite backups](cpanel-offsite-backups.md) for exact paths,
+  schedule, restore procedure, credentials, online-consistency limitations
+  and retention policy.
 - In-app backups (Settings > Backups) now include every workspace database
   and are kept in the `hive-app-backups` volume, which survives redeploys.
   `BACKUP_DISKS=local,backups` also copies them to `BACKUP_S3_*`.
@@ -153,7 +158,9 @@ Prometheus, Alertmanager, node-exporter and blackbox-exporter run by default
 (Grafana and cAdvisor stay behind the `ops` profile). Prometheus scrapes the
 backend's `/metrics`, which reports database, Redis, queue and backup health,
 and evaluates `monitoring/alert_rules.yml`. Alertmanager delivers to
-`ALERT_EMAIL_TO` via `ALERT_SMTP_*` and/or to `ALERT_WEBHOOK_URL`. With none
+`ALERT_EMAIL_TO` via `ALERT_SMTP_*`, `ALERT_WEBHOOK_URL`, or the native Telegram
+pair `ALERT_TELEGRAM_BOT_TOKEN` / `ALERT_TELEGRAM_CHAT_ID`. Telegram messages
+are labeled Hive OS. Credentials belong in Coolify, never in Git. With none
 set it logs a warning and nobody is notified.
 
 `/metrics` answers only callers on the private network (Prometheus), or a
@@ -178,9 +185,8 @@ These need changes in Coolify or on the host, not in this file:
   redeployed on purpose; the application services reach them over the
   external `hive_hive-network` they already share.
 - **Memory is overcommitted.** The per-service limits add up to more than the
-  host's 7.7 GB, and the host has no swap. Add swap
-  (`fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile &&
-  swapon /swapfile`, plus an `/etc/fstab` entry) so a spike slows the host
-  instead of triggering the OOM killer, or move to a larger server.
+  host's 7.7 GB. On 2026-10-08 the host already has 4 GiB swap, about 2.3 GiB
+  used; do not create another swap file blindly. Monitor memory pressure and
+  move to a larger server if sustained. Swap is not a replacement for RAM.
 - **One server.** Postgres has no replica; restoring from the off-site
   backups is the recovery path if the host is lost.
