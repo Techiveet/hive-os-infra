@@ -161,7 +161,13 @@ services:
   #   docker compose -f docker-compose.prod.yml --profile backup-offsite up -d
   # after filling in the BACKUP_REMOTE_* vars in .env.
   db-backup-offsite:
-    image: quay.io/minio/mc:latest
+    # The pinned, checksum-verified mc client (seaweedfs-bootstrap/Dockerfile),
+    # as in docker-compose.prod.vps.yml. quay.io/minio/mc now refuses
+    # anonymous pulls (401), which broke every fresh environment and CI.
+    build:
+      context: ./seaweedfs-bootstrap
+      dockerfile: Dockerfile
+    image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-db-backup-offsite
     restart: unless-stopped
     profiles:
@@ -226,7 +232,13 @@ services:
         max-file: "3"
 
   seaweedfs-bootstrap:
-    image: quay.io/minio/mc:latest
+    # The pinned, checksum-verified mc client (seaweedfs-bootstrap/Dockerfile),
+    # as in docker-compose.prod.vps.yml. quay.io/minio/mc now refuses
+    # anonymous pulls (401), which broke every fresh environment and CI.
+    build:
+      context: ./seaweedfs-bootstrap
+      dockerfile: Dockerfile
+    image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-seaweedfs-bootstrap
     restart: "no"
     depends_on:

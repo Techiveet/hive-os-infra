@@ -94,4 +94,12 @@ export CORE_SERVICES ONE_SHOT_SERVICES
 export BACKEND_URL FRONTEND_URL REVERB_URL
 export SEAWEEDFS_MASTER_URL SEAWEEDFS_FILER_URL SEAWEEDFS_S3_URL LIVEKIT_URL
 
-exec bash "$HC" "$@"
+# Tolerate a leading `--` (e.g. `ssh host "bash -s -- -q" < prod-gate.sh`, where
+# bash -s turns the first argument into $0) — forward only real flags to the
+# healthcheck.
+ARGS=()
+for _arg in "$@"; do
+    if (( ${#ARGS[@]} == 0 )) && [[ "$_arg" == "--" ]]; then continue; fi
+    ARGS+=("$_arg")
+done
+exec bash "$HC" "${ARGS[@]}"

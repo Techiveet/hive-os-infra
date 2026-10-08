@@ -167,6 +167,26 @@ set it logs a warning and nobody is notified.
 bearer token equal to `METRICS_TOKEN`. For defence in depth, also add
 `respond /metrics 404` to the Hive backend site in `edge.caddy`.
 
+## Healthcheck gate
+
+The same `scripts/healthcheck.sh` that guards deploys also guards the
+Coolify stack, through `scripts/prod-gate.sh` (run it ON the server):
+
+```bash
+ssh root@78.47.138.239 'bash -s' < scripts/prod-gate.sh              # full output
+ssh root@78.47.138.239 "bash -s -- -q" < scripts/prod-gate.sh        # warnings/failures only
+# or, in the server's checkout at /data/coolify/applications/z140ve7ehjoyuoluqk0azmwe:
+ssh root@78.47.138.239 'cd /data/coolify/applications/z140ve7ehjoyuoluqk0azmwe && bash scripts/prod-gate.sh -q'
+```
+
+It derives the compose project, `docker-compose.prod.vps.yml` and the
+generated `.env` from the running containers' labels, takes the required
+service set from `docker compose config --services` (minus the one-shots),
+and skips endpoints with no host-reachable address (seaweedfs, livekit —
+their containers are checked in-container instead). Exit 0 = the stack is
+healthy. Running it while a Coolify deploy is recreating containers gives
+false failures — wait for the deploy to finish first.
+
 ## Rolling back
 
 CI pushes every build as `:latest` and as `:<commit sha>`. To roll back, set
