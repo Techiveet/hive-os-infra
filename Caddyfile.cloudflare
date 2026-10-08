@@ -33,7 +33,7 @@
 		# injected script cannot load from / exfiltrate to an arbitrary host.
 		# 'unsafe-eval' retained for Monaco editor + WASM tooling (pdfjs/ffmpeg/bg-removal);
 		# migrate to nonce + 'wasm-unsafe-eval' once the frontend emits per-request nonces.
-		Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https://*.{$ROOT_DOMAIN:gulfingot.com}; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.{$ROOT_DOMAIN:gulfingot.com} wss://*.{$ROOT_DOMAIN:gulfingot.com}; worker-src 'self' blob:; frame-src 'self' blob: https://www.google.com https://maps.google.com; upgrade-insecure-requests;"
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https://*.{$ROOT_DOMAIN:techiveet.com}; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.{$ROOT_DOMAIN:techiveet.com} wss://*.{$ROOT_DOMAIN:techiveet.com}; worker-src 'self' blob:; frame-src 'self' blob: https://www.google.com https://maps.google.com; upgrade-insecure-requests;"
 
 		# Remove identifying headers
 		-X-Powered-By
@@ -52,7 +52,7 @@
 	}
 }
 
-{$ROOT_DOMAIN:gulfingot.com}, {$FRONTEND_DOMAIN:hive.gulfingot.com}, *.{$ROOT_DOMAIN:gulfingot.com} {
+{$ROOT_DOMAIN:techiveet.com}, {$FRONTEND_DOMAIN:hive.techiveet.com}, *.{$ROOT_DOMAIN:techiveet.com} {
 	import security
 	tls {
 		dns cloudflare {env.CF_API_TOKEN}
@@ -78,7 +78,7 @@
 	reverse_proxy frontend:3000
 }
 
-{$BACKEND_DOMAIN:hive-backend.gulfingot.com} {
+{$BACKEND_DOMAIN:hive-backend.techiveet.com} {
 	import security
 	tls {
 		dns cloudflare {env.CF_API_TOKEN}
@@ -86,7 +86,7 @@
 	}
 
 	@horizon path /horizon /horizon/*
-	redir @horizon https://{$HORIZON_DOMAIN:hive-queue.gulfingot.com}{uri} 308
+	redir @horizon https://{$HORIZON_DOMAIN:hive-queue.techiveet.com}{uri} 308
 
 	# Keep WebSocket upgrades working on the API domain for older clients.
 	handle_path /app/* {
@@ -98,7 +98,7 @@
 	}
 }
 
-{$REVERB_DOMAIN:hive-ws.gulfingot.com} {
+{$REVERB_DOMAIN:hive-ws.techiveet.com} {
 	import security
 	tls {
 		dns cloudflare {env.CF_API_TOKEN}
@@ -108,7 +108,7 @@
 	reverse_proxy hive-reverb:9000
 }
 
-{$HORIZON_DOMAIN:hive-queue.gulfingot.com} {
+{$HORIZON_DOMAIN:hive-queue.techiveet.com} {
 	import security
 	tls {
 		dns cloudflare {env.CF_API_TOKEN}

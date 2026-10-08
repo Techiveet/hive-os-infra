@@ -14,13 +14,13 @@ services:
       - .env
     environment:
       CF_API_TOKEN: ${CF_API_TOKEN:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-hive-monitor.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-hive-monitor.techiveet.com}
     ports:
       - "80:80"
       - "443:443"
@@ -424,16 +424,16 @@ services:
       APP_ENV: production
       OCTANE_SERVER: roadrunner
       SERVER_IP: ${SERVER_IP:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.gulfingot.com}
-      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.gulfingot.com}
-      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.gulfingot.com}
-      DB_DOMAIN: ${DB_DOMAIN:-hive-db.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.techiveet.com}
+      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.techiveet.com}
+      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.techiveet.com}
+      DB_DOMAIN: ${DB_DOMAIN:-hive-db.techiveet.com}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
       FRONTEND_INTERNAL_URL: ${FRONTEND_INTERNAL_URL:-http://frontend:3000}
       REVERB_INTERNAL_URL: ${REVERB_INTERNAL_URL:-http://reverb:9000}
@@ -516,11 +516,11 @@ services:
         max-file: "3"
     environment:
       APP_ENV: production
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
@@ -576,11 +576,11 @@ services:
       - .env
     environment:
       APP_ENV: production
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
@@ -647,9 +647,9 @@ services:
         max-file: "3"
     environment:
       APP_ENV: production
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
@@ -706,24 +706,24 @@ services:
         max-file: "3"
     environment:
       SERVER_IP: ${SERVER_IP:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.gulfingot.com}
-      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.gulfingot.com}
-      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.gulfingot.com}
-      DB_DOMAIN: ${DB_DOMAIN:-hive-db.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.techiveet.com}
+      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.techiveet.com}
+      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.techiveet.com}
+      DB_DOMAIN: ${DB_DOMAIN:-hive-db.techiveet.com}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
       NEXT_PUBLIC_CENTRAL_DOMAINS: ${NEXT_PUBLIC_CENTRAL_DOMAINS:-}
-      NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-gulfingot.com}
+      NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-techiveet.com}
       NEXT_PUBLIC_SERVER_IP: ${NEXT_PUBLIC_SERVER_IP:-}
-      NEXT_PUBLIC_FRONTEND_DOMAIN: ${NEXT_PUBLIC_FRONTEND_DOMAIN:-hive.gulfingot.com}
-      NEXT_PUBLIC_BACKEND_DOMAIN: ${NEXT_PUBLIC_BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      NEXT_PUBLIC_REVERB_DOMAIN: ${NEXT_PUBLIC_REVERB_DOMAIN:-hive-ws.gulfingot.com}
+      NEXT_PUBLIC_FRONTEND_DOMAIN: ${NEXT_PUBLIC_FRONTEND_DOMAIN:-hive.techiveet.com}
+      NEXT_PUBLIC_BACKEND_DOMAIN: ${NEXT_PUBLIC_BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      NEXT_PUBLIC_REVERB_DOMAIN: ${NEXT_PUBLIC_REVERB_DOMAIN:-hive-ws.techiveet.com}
       NEXT_PUBLIC_REVERB_APP_KEY: ${NEXT_PUBLIC_REVERB_APP_KEY}
       NEXT_PUBLIC_REVERB_HOST: ${NEXT_PUBLIC_REVERB_HOST}
       NEXT_PUBLIC_REVERB_PORT: ${NEXT_PUBLIC_REVERB_PORT}
