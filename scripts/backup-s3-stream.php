@@ -18,24 +18,60 @@ function emitTarHeader(string $name, int $size): void
     echo $header;
 }
 
+function s3RequestWithRetry(Aws\S3\S3Client &$client, string $operation, array $arguments): Aws\Result
+{
+    // Coolify can replace the storage container during a release. Retry only
+    // transport/transient errors, never credentials, missing keys or ETag
+    // mismatches; rebuild the HTTP handler to discard a stale cached Docker IP.
+    for ($attempt = 0; ; $attempt++) {
+        try {
+            return $client->{$operation}($arguments);
+        } catch (Aws\S3\Exception\S3Exception $error) {
+            $status = $error->getStatusCode() ?? 0;
+            if ($attempt >= 60 || !in_array($status, [0, 408, 429, 500, 502, 503, 504], true)) throw $error;
+            if ($attempt === 0) fwrite(STDERR, "Hive object backup: retrying transient storage interruption.\n");
+            sleep(5);
+            $client = rebuildBackupS3Client($client);
+        }
+    }
+}
+
+function rebuildBackupS3Client(Aws\S3\S3Client $client): Aws\S3\S3Client
+{
+    // getConfig() is not a round-trippable constructor argument array: it
+    // omits required service/version inputs. Rebuild from explicit public API
+    // properties while retaining the resolved credentials privately.
+    return new Aws\S3\S3Client([
+        'version' => 'latest', 'region' => $client->getRegion(),
+        'endpoint' => (string) $client->getEndpoint(),
+        'credentials' => $client->getCredentials()->wait(),
+        'use_path_style_endpoint' => (bool) $client->getConfig('use_path_style_endpoint'),
+        'http' => ['connect_timeout' => 5, 'timeout' => 120], 'retries' => 0,
+    ]);
+}
+
 $phase = 'bootstrap';
 try {
     require '/var/www/html/vendor/autoload.php';
     $app = require '/var/www/html/bootstrap/app.php';
     $app->make(Illuminate\Contracts\Console\Kernel::class)->bootstrap();
     $disk = Illuminate\Support\Facades\Storage::disk('s3');
-    $client = $disk->getClient();
+    $client = rebuildBackupS3Client($disk->getClient());
     $manifest = ['format' => 'hive-s3-logical-v1', 'started_at' => gmdate('c'), 'buckets' => [], 'objects' => []];
     $phase = 'list_buckets';
-    $buckets = array_column($client->listBuckets()['Buckets'] ?? [], 'Name');
+    $buckets = array_column(s3RequestWithRetry($client, 'listBuckets', [])['Buckets'] ?? [], 'Name');
     sort($buckets, SORT_STRING);
     foreach ($buckets as $bucket) {
         $manifest['buckets'][] = $bucket;
         $phase = 'list_objects';
-        foreach ($client->getPaginator('ListObjectsV2', ['Bucket' => $bucket]) as $page) {
+        $continuation = null;
+        do {
+            $listArguments = ['Bucket' => $bucket];
+            if ($continuation !== null) $listArguments['ContinuationToken'] = $continuation;
+            $page = s3RequestWithRetry($client, 'listObjectsV2', $listArguments);
             foreach ($page['Contents'] ?? [] as $object) {
                 $phase = 'read_object';
-                $result = $client->getObject(['Bucket' => $bucket, 'Key' => $object['Key'], 'IfMatch' => $object['ETag']]);
+                $result = s3RequestWithRetry($client, 'getObject', ['Bucket' => $bucket, 'Key' => $object['Key'], 'IfMatch' => $object['ETag']]);
                 $size = (int) $result['ContentLength'];
                 $entry = 'objects/' . hash('sha256', $bucket . "\0" . $object['Key']);
                 emitTarHeader($entry, $size);
@@ -55,7 +91,9 @@ try {
                     'bytes' => $size, 'sha256' => hash_final($hash), 'content_type' => $result['ContentType'] ?? null,
                     'cache_control' => $result['CacheControl'] ?? null, 'metadata' => $result['Metadata'] ?? []];
             }
-        }
+            $continuation = !empty($page['IsTruncated']) ? ($page['NextContinuationToken'] ?? null) : null;
+            if (!empty($page['IsTruncated']) && $continuation === null) throw new RuntimeException('Missing continuation token');
+        } while ($continuation !== null);
     }
     $manifest['finished_at'] = gmdate('c');
     $json = json_encode($manifest, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);

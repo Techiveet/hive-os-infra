@@ -71,7 +71,7 @@ network="${app}_hive-network"
 grep -Fxq "$network" "$stage/helper-networks"
 image=$(docker inspect -f '{{.Image}}' "$backend")
 docker create --name "$helper" --label hive.backup-helper=true --network "$network" \
-  --memory=384m --cpus=0.5 --env-file "$stage/helper.env" --entrypoint php "$image" /tmp/backup-s3-stream.php >/dev/null
+  --memory=384m --cpus=0.5 --env-file "$stage/helper.env" --entrypoint php "$image" -d display_errors=stderr /tmp/backup-s3-stream.php >/dev/null
 while IFS= read -r additional_network; do
   test -n "$additional_network" || continue
   if [ "$additional_network" != "$network" ]; then docker network connect "$additional_network" "$helper"; fi
