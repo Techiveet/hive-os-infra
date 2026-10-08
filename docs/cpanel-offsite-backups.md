@@ -90,6 +90,13 @@ than the unique batch tag. Never prune another project's repository.
 
 ## Restore without touching production
 
+The host verification utility is tracked as `scripts/verify-cpanel-restore.sh`.
+Install it as `/usr/local/lib/hive-backup/verify-offsite-restore.sh` with root-only
+permissions. It locks out overlapping backups, selects both snapshots from the
+completed batch in `status.json` (never a newer partial run), restores SQL into
+a network-isolated temporary PostgreSQL container and streams all object bytes
+through the manifest verifier. Private SQL failure details stay on the host.
+
 1. Load the repository/password/SSH configuration in a private recovery shell.
 2. List snapshots and choose the two entries with a matching UTC batch tag.
 3. Restore `databases.sql.gz` into a scratch directory. Verify `gzip -t`.
