@@ -520,6 +520,10 @@ services:
       dockerfile: Dockerfile
     container_name: hive-frontend
     restart: unless-stopped
+    # Run the mounted entrypoint rather than the copy baked into the image, so
+    # dev-server startup changes (e.g. NEXT_DEV_BUNDLER) apply on restart
+    # without an image rebuild.
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"]
     ports:
       - "127.0.0.1:3001:3000"
     volumes:
@@ -542,6 +546,8 @@ services:
       # a plain restart no longer forces every route to recompile. Set to
       # "always" to force a reset on the next start.
       NEXT_DEV_CACHE_RESET: "auto"
+      # Dev bundler: "turbopack" (default, fast, on-disk cache) or "webpack".
+      NEXT_DEV_BUNDLER: "turbopack"
     depends_on:
       - backend
     healthcheck:
