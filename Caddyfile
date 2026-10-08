@@ -56,7 +56,15 @@
 	}
 }
 
-{$FRONTEND_DOMAIN} {
+# Cloudflare proxies techiveet.com in Flexible SSL mode: its edge reaches this
+# origin over plain HTTP. Each Hive address therefore also answers on http://
+# (an explicit http site stops Caddy's HTTP->HTTPS redirect, which would loop
+# behind Flexible). Caddy still obtains certificates for the https:// side,
+# so switching Cloudflare to Full (strict) later needs no change here.
+# X-Forwarded-Proto from Cloudflare is trusted (servers.trusted_proxies), so
+# the app still sees the visitor's https scheme.
+
+{$FRONTEND_DOMAIN}, http://{$FRONTEND_DOMAIN} {
 	import security
 	encode zstd gzip
 
@@ -81,19 +89,19 @@
 	}
 }
 
-{$BACKEND_DOMAIN} {
+{$BACKEND_DOMAIN}, http://{$BACKEND_DOMAIN} {
 	import security
 	encode zstd gzip
 	import backend_upstream
 }
 
-{$REVERB_DOMAIN} {
+{$REVERB_DOMAIN}, http://{$REVERB_DOMAIN} {
 	import security
 	encode zstd gzip
 	reverse_proxy hive-reverb:9000
 }
 
-{$VIDEO_DOMAIN} {
+{$VIDEO_DOMAIN}, http://{$VIDEO_DOMAIN} {
 	import security
 	encode zstd gzip
 	reverse_proxy video-media:7880
@@ -122,7 +130,7 @@ hive-video.gulfingot.com {
 	redir https://{$VIDEO_DOMAIN}{uri} 308
 }
 
-{$HORIZON_DOMAIN} {
+{$HORIZON_DOMAIN}, http://{$HORIZON_DOMAIN} {
 	import security
 	encode zstd gzip
 	import backend_upstream
@@ -133,7 +141,7 @@ hive-video.gulfingot.com {
 # (*_INTERNAL_URL). Grafana/Meilisearch are reachable for ops via the
 # 127.0.0.1-bound host ports declared in docker-compose.prod.yml (use an SSH tunnel).
 
-https:// {
+https://, http://*.{$ROOT_DOMAIN} {
 	import security
 	tls {
 		on_demand
