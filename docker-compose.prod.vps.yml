@@ -837,6 +837,10 @@ services:
     pull_policy: always
     container_name: hive-frontend
     restart: unless-stopped
+    # Keep a Next.js memory spike inside this service, not the shared VPS.
+    # Memory+swap is a combined ceiling; tune these from Coolify if needed.
+    mem_limit: ${HIVE_FRONTEND_MEMORY_LIMIT:-1536m}
+    memswap_limit: ${HIVE_FRONTEND_MEMORY_SWAP_LIMIT:-2048m}
     logging:
       driver: json-file
       options:
