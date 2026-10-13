@@ -171,6 +171,9 @@ services:
     image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-db-backup-offsite
     restart: unless-stopped
+    # Optional S3 mirror; production off-site backups use the separately
+    # monitored encrypted cPanel timer. This mirror remains explicitly idle
+    # until separately configured; process uptime is not backup-delivery proof.
     environment:
       BACKUP_REMOTE_ENDPOINT: ${BACKUP_REMOTE_ENDPOINT:-}
       BACKUP_REMOTE_ACCESS_KEY: ${BACKUP_REMOTE_ACCESS_KEY:-}
@@ -273,14 +276,21 @@ services:
       SEAWEEDFS_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-hive-seaweedfs}
       SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:?SEAWEEDFS_SECRET_KEY must be set in .env}
       SEAWEEDFS_BUCKET: ${SEAWEEDFS_BUCKET:-hive-production}
-    entrypoint: >
-      /bin/sh -ec "
-        for i in \$$(seq 1 5); do
-          mc alias set local http://seaweedfs:8333 \$${SEAWEEDFS_ACCESS_KEY} \$${SEAWEEDFS_SECRET_KEY} >/dev/null 2>&1 && break || sleep 2;
-        done;
-        mc mb --ignore-existing local/\$${SEAWEEDFS_BUCKET} >/dev/null 2>&1 || true;
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        for i in $$(seq 1 5); do
+          mc alias set local http://seaweedfs:8333 "$${SEAWEEDFS_ACCESS_KEY}" "$${SEAWEEDFS_SECRET_KEY}" >/dev/null 2>&1 && break || sleep 2
+        done
+        mc mb --ignore-existing "local/$${SEAWEEDFS_BUCKET}" >/dev/null 2>&1
         exec tail -f /dev/null
-      "
+    healthcheck:
+      test: ["CMD-SHELL", "mc stat local/$${SEAWEEDFS_BUCKET} >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -365,6 +375,12 @@ services:
       - /root/projects/hive/storage/rembg-models:/root/.u2net
     expose:
       - "5000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/openapi.json >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -418,6 +434,12 @@ services:
         max-file: "3"
     expose:
       - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -441,6 +463,8 @@ services:
       - .env
     environment:
       APP_ENV: production
+      APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
       APP_KEY: ${APP_KEY:?APP_KEY must be set in .env}
       APP_DEBUG: ${APP_DEBUG:-false}
       DB_CONNECTION: ${DB_CONNECTION:-pgsql}
@@ -558,6 +582,8 @@ services:
       - .env
     environment:
       APP_ENV: production
+      APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
       DB_CONNECTION: ${DB_CONNECTION:-pgsql}
       CACHE_STORE: ${CACHE_STORE:-redis}
       SESSION_DRIVER: ${SESSION_DRIVER:-redis}
@@ -606,7 +632,14 @@ services:
         exec php artisan horizon
       '
     volumes:
+      - ./scripts/healthcheck-worker.php:/opt/hive-healthcheck-worker.php:ro
       - hive-app-backups:/var/www/html/storage/app/private/system-backups
+    healthcheck:
+      test: ["CMD", "php", "/opt/hive-healthcheck-worker.php", "horizon"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
       - hive-production-data
@@ -632,6 +665,8 @@ services:
       - .env
     environment:
       APP_ENV: production
+      APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
       DB_CONNECTION: ${DB_CONNECTION:-pgsql}
       CACHE_STORE: ${CACHE_STORE:-redis}
       SESSION_DRIVER: ${SESSION_DRIVER:-redis}
@@ -674,7 +709,14 @@ services:
         exec php artisan schedule:work
       '
     volumes:
+      - ./scripts/healthcheck-worker.php:/opt/hive-healthcheck-worker.php:ro
       - hive-app-backups:/var/www/html/storage/app/private/system-backups
+    healthcheck:
+      test: ["CMD", "php", "/opt/hive-healthcheck-worker.php", "schedule:work"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -698,6 +740,8 @@ services:
       - .env
     environment:
       APP_ENV: production
+      APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
       DB_CONNECTION: ${DB_CONNECTION:-pgsql}
       CACHE_STORE: ${CACHE_STORE:-redis}
       SESSION_DRIVER: ${SESSION_DRIVER:-redis}
@@ -803,6 +847,12 @@ services:
   video-media:
     image: livekit/livekit-server:v1.13.6
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7880/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     logging:
       driver: json-file
       options:
@@ -837,6 +887,9 @@ services:
     pull_policy: always
     container_name: hive-frontend
     restart: unless-stopped
+    # Leave native buffers/threads headroom above the explicit V8 old heap.
+    mem_limit: ${HIVE_FRONTEND_MEMORY_LIMIT:-1536m}
+    memswap_limit: ${HIVE_FRONTEND_MEMORY_SWAP_LIMIT:-2048m}
     logging:
       driver: json-file
       options:
@@ -845,6 +898,7 @@ services:
     env_file:
       - .env
     environment:
+      NODE_OPTIONS: ${HIVE_FRONTEND_NODE_OPTIONS:---max-old-space-size=1024}
       SERVER_IP: ${SERVER_IP:-}
       ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
       FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
@@ -927,6 +981,12 @@ services:
       - hive-prometheus-data:/prometheus
     expose:
       - "9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/ready >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -961,6 +1021,12 @@ services:
       - hive-alertmanager-data:/alertmanager
     expose:
       - "9093"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9093/-/ready >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -985,6 +1051,12 @@ services:
       - ./monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
     expose:
       - "9115"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9115/metrics >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -1036,24 +1108,85 @@ services:
       - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
     expose:
       - "9100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9100/metrics >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
   # Monitoring Exporter: Container Metrics
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    image: ghcr.io/google/cadvisor:0.60.6@sha256:b8e7d1093144fd088f425ff003d75a4aa405de075db78dae3bc563730b1bd07a
     container_name: hive-cadvisor
     restart: unless-stopped
-    profiles:
-      - ops
+    mem_limit: 256m
+    memswap_limit: 384m
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - --housekeeping_interval=30s
+      - --store_container_labels=false
+      - --docker_only=true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     volumes:
       - /:/rootfs:ro
-      - /var/run:/var/run:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker's containerd image store requires this exact socket for discovery.
+      # No public port, privileged mode or writable host filesystem is granted.
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
     expose:
       - "8080"
+    networks:
+      - hive-network
+
+  # Private dependency metrics. No host port or unauthenticated public route.
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+    restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 192m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DATA_SOURCE_URI: db:5432/${DB_DATABASE:-hive}?sslmode=disable
+      DATA_SOURCE_USER: ${DB_USERNAME:-hive}
+      DATA_SOURCE_PASS: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9187/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - hive-network
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.93.0-alpine@sha256:93831cd4d5d67687de67c9d5221b14312fea580af8d157583ed9d4459bf2dd70
+    restart: unless-stopped
+    mem_limit: 64m
+    memswap_limit: 128m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      REDIS_ADDR: redis://hive-stack-redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9121/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 

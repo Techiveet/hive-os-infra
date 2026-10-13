@@ -13,6 +13,7 @@
 # With none of them set, alerts are still evaluated and visible in the
 # Alertmanager UI, but nobody is notified; the container logs a warning.
 set -eu
+umask 077
 
 config=/tmp/alertmanager.yml
 receiver_body=""
@@ -36,7 +37,10 @@ if [ -n "${ALERT_EMAIL_TO:-}" ] && [ -n "${ALERT_SMTP_HOST:-}" ] && [ -n "${ALER
         auth_username: '$(yaml_value "${ALERT_SMTP_USERNAME:-}")'
         auth_password: '$(yaml_value "${ALERT_SMTP_PASSWORD:-}")'
         require_tls: true
-        send_resolved: true"
+        send_resolved: true
+        headers:
+          Subject: 'Hive Cloud - Hive ERP [{{ .Status | toUpper }}] {{ .CommonLabels.alertname }}'
+        text: '{{ range .Alerts }}{{ .Labels.alertname }} [{{ .Labels.severity }}]: {{ .Annotations.summary }} | {{ .Annotations.description }}{{ end }}'"
 fi
 
 if [ -n "${ALERT_WEBHOOK_URL:-}" ]; then
@@ -57,7 +61,7 @@ if [ -n "${ALERT_TELEGRAM_BOT_TOKEN:-}" ] || [ -n "${ALERT_TELEGRAM_CHAT_ID:-}" 
         chat_id: ${ALERT_TELEGRAM_CHAT_ID}
         send_resolved: true
         parse_mode: ''
-        message: 'Hive OS: {{ .Status }}{{ range .Alerts }} | {{ .Labels.alertname }}: {{ .Annotations.summary }}{{ end }}'"
+        message: 'Hive Cloud - Hive ERP: {{ .Status | toUpper }}{{ range .Alerts }} | {{ .Labels.alertname }} [{{ .Labels.severity }}]: {{ .Annotations.summary }}{{ end }}'"
 fi
 
 if [ -z "$receiver_body" ]; then
@@ -67,19 +71,34 @@ fi
 cat > "$config" <<YAML
 route:
   receiver: oncall
-  group_by: ['alertname', 'severity']
+  group_by: ['alertname', 'severity', 'service', 'environment']
   group_wait: 30s
   group_interval: 5m
   repeat_interval: 4h
+  routes:
+    - matchers: ['alertname = "HiveDeliveryVerification"']
+      receiver: oncall
+      group_wait: 2s
+      group_interval: 10s
+    - matchers: ['severity = "critical"']
+      receiver: oncall
+      group_wait: 10s
+      repeat_interval: 1h
 
 inhibit_rules:
   - source_matchers: ['alertname = "PostgresDown"']
     target_matchers: ['alertname =~ "PostgresConnections.*|PostgresLockWait.*|High5xxRate|Critical5xxRate|ElevatedP95Latency|CriticalP95Latency"']
+    equal: ['environment']
   - source_matchers: ['alertname = "RedisDown"']
     target_matchers: ['alertname =~ "QueueBacklog.*|QueueOldestJob.*|RedisMemoryHigh"']
+    equal: ['environment']
 
 receivers:
   - name: oncall${receiver_body}
 YAML
+
+if [ "${ALERTMANAGER_VALIDATE_ONLY:-0}" = "1" ]; then
+  exec /bin/amtool check-config "$config"
+fi
 
 exec /bin/alertmanager --config.file="$config" --storage.path=/alertmanager "$@"
