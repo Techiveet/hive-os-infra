@@ -1,4 +1,51 @@
 groups:
+  - name: hive_frontend_and_monitoring_alerts
+    rules:
+      - alert: HiveFrontendDown
+        expr: probe_success{instance="http://frontend:3000"} == 0 or absent(probe_success{instance="http://frontend:3000"})
+        for: 1m
+        labels:
+          severity: critical
+          service: frontend
+          environment: production
+        annotations:
+          summary: "Hive frontend is unreachable or its probe is missing"
+      - alert: HiveMonitoringTargetDown
+        expr: up{job=~"cadvisor|postgres-exporter|redis-exporter|hive-backend|node-exporter|alertmanager|blackbox-http"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: monitoring
+          environment: production
+        annotations:
+          summary: "Hive monitoring target is unavailable"
+      - alert: HiveFrontendMemoryHigh
+        expr: container_memory_working_set_bytes{name=~"frontend-z140.*"} / container_spec_memory_limit_bytes{name=~"frontend-z140.*"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: frontend
+          environment: production
+        annotations:
+          summary: "Hive frontend exceeds 85% of its memory budget"
+      - alert: HiveFrontendMetricsMissing
+        expr: absent(container_memory_working_set_bytes{name=~"frontend-z140.*"})
+        for: 5m
+        labels:
+          severity: warning
+          service: monitoring
+          environment: production
+        annotations:
+          summary: "Hive frontend memory metrics are missing; scrape health alone is not coverage"
+      - alert: HiveFrontendRestarted
+        expr: changes(container_start_time_seconds{name=~"frontend-z140.*"}[30m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: frontend
+          environment: production
+        annotations:
+          summary: "Hive frontend restarted; investigate before recurring outages"
   - name: hive_host_capacity_alerts
     rules:
       - alert: HiveHostDiskHigh

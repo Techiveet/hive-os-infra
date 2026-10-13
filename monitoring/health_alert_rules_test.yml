@@ -1,0 +1,97 @@
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'container_memory_working_set_bytes{name="frontend-z140-test",job="cadvisor"}'
+        values: '90+0x10'
+      - series: 'container_spec_memory_limit_bytes{name="frontend-z140-test",job="cadvisor"}'
+        values: '100+0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: HiveFrontendMemoryHigh
+        exp_alerts:
+          - exp_labels:
+              name: frontend-z140-test
+              job: cadvisor
+              severity: warning
+              service: frontend
+              environment: production
+            exp_annotations:
+              summary: "Hive frontend exceeds 85% of its memory budget"
+  - interval: 1m
+    input_series:
+      - series: 'up{job="cadvisor"}'
+        values: '1+0x10'
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: HiveFrontendMetricsMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: monitoring
+              environment: production
+            exp_annotations:
+              summary: "Hive frontend memory metrics are missing; scrape health alone is not coverage"
+  - interval: 1m
+    input_series:
+      - series: 'container_start_time_seconds{name="frontend-z140-test",job="cadvisor"}'
+        values: '100 100 200 200 200'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HiveFrontendRestarted
+        exp_alerts:
+          - exp_labels:
+              name: frontend-z140-test
+              job: cadvisor
+              severity: warning
+              service: frontend
+              environment: production
+            exp_annotations:
+              summary: "Hive frontend restarted; investigate before recurring outages"
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{instance="http://frontend:3000",job="blackbox-http"}'
+        values: '1 0 0 0'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: HiveFrontendDown
+        exp_alerts:
+          - exp_labels:
+              instance: http://frontend:3000
+              job: blackbox-http
+              severity: critical
+              service: frontend
+              environment: production
+            exp_annotations:
+              summary: "Hive frontend is unreachable or its probe is missing"
+  - interval: 1m
+    input_series:
+      - series: 'up{job="postgres-exporter",instance="postgres-exporter:9187"}'
+        values: '1 0 0 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HiveMonitoringTargetDown
+        exp_alerts:
+          - exp_labels:
+              instance: postgres-exporter:9187
+              job: postgres-exporter
+              severity: warning
+              service: monitoring
+              environment: production
+            exp_annotations:
+              summary: "Hive monitoring target is unavailable"
+  - interval: 1m
+    input_series: []
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: HiveFrontendDown
+        exp_alerts:
+          - exp_labels:
+              instance: http://frontend:3000
+              severity: critical
+              service: frontend
+              environment: production
+            exp_annotations:
+              summary: "Hive frontend is unreachable or its probe is missing"
