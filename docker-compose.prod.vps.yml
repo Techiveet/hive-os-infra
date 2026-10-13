@@ -279,8 +279,8 @@ services:
     entrypoint:
       - /bin/sh
       - -ec
-    # Keep the script in command: Coolify escapes quotes inside entrypoint
-    # script arguments, which otherwise changes the S3 credential values.
+    # Keep the executable and script separate for Compose tooling. Storage
+    # readiness, not process startup alone, must precede authentication.
     command:
       - |
         ready=0
