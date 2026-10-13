@@ -127,7 +127,8 @@ services:
   # PostgreSQL backups, independent of the application. Cluster mode runs
   # pg_dumpall, so every workspace database (tenant<id>) is included, not just
   # the central one. Dumps land on the host next to the other data
-  # directories; db-backup-offsite copies them off this server.
+  # directories. Production off-site recovery uses the encrypted cPanel timer;
+  # db-backup-offsite is a separate, explicitly opt-in S3 mirror.
   db-backup:
     image: prodrigestivill/postgres-backup-local:17-alpine
     container_name: hive-db-backup
@@ -164,6 +165,12 @@ services:
   # database does not survive losing that disk. Idles until BACKUP_REMOTE_*
   # is set; use a private bucket with server-side encryption.
   db-backup-offsite:
+    # Not required by Hive: enable only after configuring a separate S3 mirror.
+    profiles:
+      - optional-s3-backup
+    # The actual cPanel backup job is monitored independently; do not treat
+    # this intentionally disabled helper as an application readiness probe.
+    exclude_from_hc: true
     # The pinned, checksum-verified mc client also used by seaweedfs-bootstrap.
     build:
       context: ./seaweedfs-bootstrap
