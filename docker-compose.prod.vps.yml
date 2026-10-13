@@ -271,7 +271,7 @@ services:
         max-file: "3"
     depends_on:
       seaweedfs:
-        condition: service_started
+        condition: service_healthy
     environment:
       SEAWEEDFS_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-hive-seaweedfs}
       SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:?SEAWEEDFS_SECRET_KEY must be set in .env}
@@ -279,10 +279,16 @@ services:
     entrypoint:
       - /bin/sh
       - -ec
+    # Keep the script in command: Coolify escapes quotes inside entrypoint
+    # script arguments, which otherwise changes the S3 credential values.
+    command:
       - |
-        for i in $$(seq 1 5); do
-          mc alias set local http://seaweedfs:8333 "$${SEAWEEDFS_ACCESS_KEY}" "$${SEAWEEDFS_SECRET_KEY}" >/dev/null 2>&1 && break || sleep 2
+        ready=0
+        for i in $$(seq 1 60); do
+          if mc alias set local http://seaweedfs:8333 "$${SEAWEEDFS_ACCESS_KEY}" "$${SEAWEEDFS_SECRET_KEY}" >/dev/null 2>&1; then ready=1; break; fi
+          sleep 2
         done
+        if [ "$$ready" != 1 ]; then echo 'storage-bootstrap: authenticated endpoint unavailable' >&2; exit 1; fi
         mc mb --ignore-existing "local/$${SEAWEEDFS_BUCKET}" >/dev/null 2>&1
         exec tail -f /dev/null
     healthcheck:
