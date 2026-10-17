@@ -1,10 +1,10 @@
 # Queen Bee on the production VPS
 
-The CPU-only Ollama image is built in the backend repository from official Ollama 0.34.3. The final image excludes GPU runtimes. Pin OLLAMA_IMAGE to the tested registry digest; pin HIVE_BACKEND_TAG and HIVE_FRONTEND_TAG to the release commit SHAs.
+The CPU-only Ollama image is built in the backend repository from official Ollama 0.34.3. The final image excludes GPU runtimes. The compose defaults pin OLLAMA_IMAGE to the tested registry digest and HIVE_BACKEND_TAG / HIVE_FRONTEND_TAG to the release commit SHAs. Update these defaults for each coordinated release.
 
 Ollama has no published port. It shares the private Hive network and persists models in hive-ollama-models. Its limits are two CPU threads, 1792 MiB memory, 2048 MiB memory plus swap, one resident model, one parallel generation, and a 2048-token context. The VPS has no GPU. Measure latency before changing models; larger models can exhaust resources needed by the ERP.
 
-Required saved Coolify runtime settings:
+The checked-in defaults pin the tested release, so rollout does not require changing Coolify token permissions. Coolify runtime overrides remain supported. Required effective runtime settings:
 - OLLAMA_BASE_URL=http://ollama:11434/v1
 - OLLAMA_MODEL=qwen2.5:1.5b
 - OLLAMA_EMBEDDING_MODEL=embeddinggemma:300m-qat-q8_0

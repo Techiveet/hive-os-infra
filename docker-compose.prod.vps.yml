@@ -458,7 +458,7 @@ services:
 
   # Private bounded CPU inference; no public port or GPU libraries.
   ollama:
-    image: ${OLLAMA_IMAGE:-ghcr.io/techiveet/hive-ollama-cpu:0.34.3}
+    image: ${OLLAMA_IMAGE:-ghcr.io/techiveet/hive-ollama-cpu@sha256:62106c69377c18c84b676725c92984e025de13a1f9fc6c37cbfbe61af8d68b69}
     restart: unless-stopped
     mem_limit: 1792m
     memswap_limit: 2048m
@@ -494,7 +494,7 @@ services:
 
   # Laravel Backend
   backend:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-latest}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-da38ac0a0196ddc696bf31435dc00c338672a45a}
     pull_policy: always
     container_name: hive-backend
     restart: unless-stopped
@@ -618,7 +618,7 @@ services:
 
   # Queue Worker / Horizon
   queue:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-latest}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-da38ac0a0196ddc696bf31435dc00c338672a45a}
     pull_policy: always
     container_name: hive-queue
     restart: unless-stopped
@@ -706,7 +706,7 @@ services:
   # Laravel scheduler (backups, trash purge, integrations sync, ...). The
   # legacy stack ran this as hive-scheduler; it was lost in the Coolify move.
   scheduler:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-latest}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-da38ac0a0196ddc696bf31435dc00c338672a45a}
     pull_policy: always
     container_name: hive-scheduler
     restart: unless-stopped
@@ -786,7 +786,7 @@ services:
 
   # WebSocket Engine
   reverb:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-latest}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-da38ac0a0196ddc696bf31435dc00c338672a45a}
     pull_policy: always
     container_name: hive-reverb
     restart: unless-stopped
@@ -952,7 +952,7 @@ services:
 
   # Next.js Frontend
   frontend:
-    image: ghcr.io/techiveet/hive-os-frontend:${HIVE_FRONTEND_TAG:-latest}
+    image: ghcr.io/techiveet/hive-os-frontend:${HIVE_FRONTEND_TAG:-78e245018ac35c2ec198d481c38dfedbcaecfb7a}
     pull_policy: always
     container_name: hive-frontend
     restart: unless-stopped
