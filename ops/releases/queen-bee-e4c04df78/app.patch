@@ -1,0 +1,270 @@
+diff --git a/Modules/SupportBot/app/Services/Copilot/CopilotService.php b/Modules/SupportBot/app/Services/Copilot/CopilotService.php
+index 4b5767041..b19c4b7bb 100644
+--- a/Modules/SupportBot/app/Services/Copilot/CopilotService.php
++++ b/Modules/SupportBot/app/Services/Copilot/CopilotService.php
+@@ -1283,7 +1283,9 @@ private function toolMentionScore(string $message, array $tool): int
+     private function isModuleOverviewQuestion(string $message): bool
+     {
+         $normalised = Str::lower($message);
+-        $hasModule = Str::contains($normalised, ['module', 'modul', 'ሞጁል']);
++        $hasModule = preg_match('/\bmodules\b|ሞጁሎች/u', $normalised) === 1
++            || (preg_match('/\b(?:how many|list|all)\b/u', $normalised) === 1
++                && str_contains($normalised, 'module'));
+         $hasQuestion = Str::contains($normalised, ['how many', 'what', 'which', 'list', 'all', 'exist', 'have', 'count', 'show', 'ስንት']);
+ 
+         return $hasModule && $hasQuestion;
+diff --git a/Modules/SupportBot/app/Services/SupportBotEngineService.php b/Modules/SupportBot/app/Services/SupportBotEngineService.php
+index d4049717f..131b80cdc 100644
+--- a/Modules/SupportBot/app/Services/SupportBotEngineService.php
++++ b/Modules/SupportBot/app/Services/SupportBotEngineService.php
+@@ -508,7 +508,10 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+             $context = is_array($ragResult) ? $ragResult : [];
+ 
+             if ($platform !== null) {
+-                array_unshift($context, [
++                // A matched platform guide is authoritative for ERP questions.
++                // Loose FAQ hits often contain unrelated legacy instructions;
++                // mixing them in overwhelms a small local model's context.
++                $context = [[
+                     'title' => $platform['title'],
+                     // Trimmed to the conversational part of the document —
+                     // purpose and navigation — not the exhaustive endpoint,
+@@ -518,7 +521,7 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+                     // out. The full, untrimmed document is still what gets
+                     // shown verbatim if the LLM step is skipped entirely.
+                     'content' => Str::limit($platform['content'], 1400, ''),
+-                ]);
++                ]];
+             }
+ 
+             $llmResponseText = $this->llmService->generateResponse(
+diff --git a/Modules/SupportBot/app/Services/SupportBotLlmService.php b/Modules/SupportBot/app/Services/SupportBotLlmService.php
+index 5d8815a3e..11b981347 100644
+--- a/Modules/SupportBot/app/Services/SupportBotLlmService.php
++++ b/Modules/SupportBot/app/Services/SupportBotLlmService.php
+@@ -84,6 +84,7 @@ public function lastError(): ?string
+ 1. Only answer questions about HIVE.OS, its modules, and Ethiopian business operations.
+ 2. Never invent module names, routes, or figures.
+ 3. Keep answers concise, helpful, and formatted with clean Markdown.
++   Use at most two short sentences and the most relevant exact page path unless the user asks for steps or a list.
+ 4. Never repeat words or phrases in loops.
+ 5. Write in the language named at the top of these instructions, and in no other. HIVE.OS supports English and Amharic only.
+ EOT;
+@@ -600,7 +601,7 @@ private function dispatch(
+         return $this->guard(match ($provider) {
+             'gemini' => $this->callGemini($apiKey, $model ?: self::DEFAULT_MODELS['gemini'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'groq' => $this->callOpenAiCompatible('https://api.groq.com/openai/v1', $apiKey, $model ?: self::DEFAULT_MODELS['groq'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+-            'ollama' => $this->callOpenAiCompatible($baseUrl, $apiKey ?: 'ollama-local', $model ?: self::DEFAULT_MODELS['ollama'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout, disableThinking: str_starts_with(strtolower($model ?? ''), 'qwen3')),
++            'ollama' => $this->callOllama($baseUrl, $apiKey, $model ?: self::DEFAULT_MODELS['ollama'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'openrouter' => $this->callOpenAiCompatible('https://openrouter.ai/api/v1', $apiKey, $model ?: self::DEFAULT_MODELS['openrouter'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'anthropic' => $this->callAnthropic($apiKey, $model ?: self::DEFAULT_MODELS['anthropic'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             default => $this->callOpenAiCompatible('https://api.openai.com/v1', $apiKey, $model ?: self::DEFAULT_MODELS['openai'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+@@ -796,6 +797,63 @@ protected function callGemini(
+         return null;
+     }
+ 
++    /** Native options keep CPU inference within the deployment's allocation. */
++    protected function callOllama(
++        string $baseUrl,
++        ?string $apiKey,
++        string $model,
++        string $systemPrompt,
++        array $history,
++        string $userMessage,
++        float $temperature,
++        int $maxTokens,
++        int $timeout,
++    ): ?string {
++        $messages = [['role' => 'system', 'content' => $systemPrompt]];
++        foreach ($history as $message) {
++            $messages[] = [
++                'role' => ($message['sender_type'] ?? 'visitor') === 'visitor' ? 'user' : 'assistant',
++                'content' => (string) ($message['content'] ?? ''),
++            ];
++        }
++        $messages[] = ['role' => 'user', 'content' => $userMessage];
++        $endpoint = preg_replace('~/v1$~', '', rtrim($baseUrl, '/')).'/api/chat';
++
++        try {
++            $request = Http::timeout($timeout)->connectTimeout(5)
++                ->retry(2, 300, self::retryUnlessTimedOut(...), throw: false);
++            if ($apiKey) {
++                $request = $request->withToken($apiKey);
++            }
++            $response = $request->post($endpoint, [
++                'model' => $model,
++                'messages' => $messages,
++                'stream' => false,
++                ...(str_starts_with(strtolower($model), 'qwen3') ? ['think' => false] : []),
++                'options' => [
++                    'temperature' => $temperature,
++                    'num_predict' => $maxTokens,
++                    'num_thread' => max(1, min(16, (int) config('services.ollama.num_thread', 2))),
++                    'num_ctx' => max(512, min(32768, (int) config('services.ollama.num_ctx', 2048))),
++                ],
++            ]);
++            if ($response->successful()) {
++                $text = $response->json('message.content');
++                if (is_string($text) && trim($text) !== '') {
++                    return $text;
++                }
++                $this->lastError = 'Ollama returned no completion text.';
++            } else {
++                $this->lastError = $this->describeHttpError($response->json(), $response->status());
++            }
++        } catch (\Throwable $exception) {
++            $this->lastError = 'Could not reach the configured Ollama service: '.$exception->getMessage();
++            Log::warning('SupportBot Ollama call failed: '.$exception->getMessage());
++        }
++
++        return null;
++    }
++
+     protected function callOpenAiCompatible(
+         string $baseUrl,
+         string $apiKey,
+diff --git a/Modules/SupportBot/tests/Feature/CopilotPhrasingTest.php b/Modules/SupportBot/tests/Feature/CopilotPhrasingTest.php
+index 88f6d2142..b64f1aa3d 100644
+--- a/Modules/SupportBot/tests/Feature/CopilotPhrasingTest.php
++++ b/Modules/SupportBot/tests/Feature/CopilotPhrasingTest.php
+@@ -71,7 +71,7 @@ public function test_a_measured_language_failure_skips_generation_but_keeps_supp
+             'languages' => json_encode(['en' => true, 'am' => false]),
+         ]);
+         Cache::forget('copilot:model-languages:all:ollama');
+-        Http::fake(['*' => Http::response(['choices' => [['message' => ['content' => 'Open Products.']]]])]);
++        Http::fake(['*' => Http::response(['message' => ['content' => 'Open Products.']])]);
+         $llm = app(SupportBotLlmService::class);
+         $this->assertNull($llm->complete($this->bot, 'Use supplied facts.', 'ምርት እንዴት እፈጥራለሁ?'));
+         $this->assertNull($llm->generateResponse($this->bot, 'ምርት እንዴት እፈጥራለሁ?'));
+@@ -83,13 +83,18 @@ public function test_a_measured_language_failure_skips_generation_but_keeps_supp
+ 
+     public function test_qwen_rewriting_disables_thinking_without_changing_cloud_requests(): void
+     {
+-        config(['services.ollama.base_url' => 'http://ollama:11434/v1']);
+-        Http::fake(['*' => Http::response(['choices' => [['message' => ['content' => 'Open Products.']]]])]);
++        config(['services.ollama.base_url' => 'http://ollama:11434/v1', 'services.ollama.num_thread' => 2]);
++        Http::fake([
++            'http://ollama:11434/api/chat' => Http::response(['message' => ['content' => 'Open Products.']]),
++            'https://api.openai.com/v1/chat/completions' => Http::response(['choices' => [['message' => ['content' => 'Open Products.']]]]),
++        ]);
+         $this->bot->update(['llm_provider' => 'ollama', 'model' => 'qwen3.5:0.8b-q8_0', 'llm_api_key' => null]);
+         $llm = app(SupportBotLlmService::class);
+         $this->assertSame('Open Products.', $llm->complete($this->bot, 'Use supplied facts.', 'How do I create a product?'));
+-        Http::assertSent(fn ($request) => $request->url() === 'http://ollama:11434/v1/chat/completions'
+-            && $request['reasoning_effort'] === 'none');
++        Http::assertSent(fn ($request) => $request->url() === 'http://ollama:11434/api/chat'
++            && $request['think'] === false && $request['stream'] === false
++            && $request['options']['num_thread'] === 2 && $request['options']['num_ctx'] === 2048
++            && $request['options']['num_predict'] === 1200);
+         $this->bot->update(['llm_provider' => 'openai', 'model' => 'gpt-4o-mini', 'llm_api_key' => 'test-key']);
+         $this->assertSame('Open Products.', $llm->complete($this->bot, 'Use supplied facts.', 'How do I create a product?'));
+         Http::assertSent(fn ($request) => $request->url() === 'https://api.openai.com/v1/chat/completions'
+@@ -97,6 +102,17 @@ public function test_qwen_rewriting_disables_thinking_without_changing_cloud_req
+         Http::assertSentCount(2);
+     }
+ 
++    public function test_native_ollama_errors_keep_the_grounded_fallback_available(): void
++    {
++        config(['services.ollama.base_url' => 'http://ollama:11434/v1']);
++        $this->bot->update(['llm_provider' => 'ollama', 'model' => 'test-native', 'llm_api_key' => null]);
++        Http::fake(['http://ollama:11434/api/chat' => Http::response(['error' => 'model unavailable'], 503)]);
++        $llm = app(SupportBotLlmService::class);
++        $this->assertNull($llm->complete($this->bot, 'Use supplied facts.', 'How do I create a product?'));
++        $this->assertNotEmpty($llm->lastError());
++        Http::assertSentCount(1);
++    }
++
+     public function test_a_faithful_rewrite_is_used(): void
+     {
+         $rewrite = "Products are what you buy and sell.\n\n"
+diff --git a/Modules/SupportBot/tests/Feature/CopilotWorkflowTest.php b/Modules/SupportBot/tests/Feature/CopilotWorkflowTest.php
+index 5b5a835a7..9e9b2e22a 100644
+--- a/Modules/SupportBot/tests/Feature/CopilotWorkflowTest.php
++++ b/Modules/SupportBot/tests/Feature/CopilotWorkflowTest.php
+@@ -51,6 +51,28 @@ public function test_it_explains_a_module_using_generated_documentation(): void
+         $this->assertNotEmpty($response->json('payload.sources'));
+     }
+ 
++    public function test_a_named_module_question_uses_its_guide_instead_of_the_module_directory(): void
++    {
++        $user = $this->userWith(['view_procurement', 'manage_procurement']);
++        $response = $this->actingAsUser($user)
++            ->postJson('/api/v1/copilot/chat', ['message' => 'What is the Procurement module?'])
++            ->assertOk();
++
++        $this->assertStringNotContainsString('Enterprise Platform Modules', $response->json('content'));
++        $this->assertStringContainsString('/dashboard/procurement', $response->json('content'));
++        $this->assertNotEmpty($response->json('payload.sources'));
++    }
++
++    public function test_an_explicit_module_overview_still_returns_the_directory(): void
++    {
++        $user = $this->userWith(['view_procurement']);
++        $response = $this->actingAsUser($user)
++            ->postJson('/api/v1/copilot/chat', ['message' => 'What modules does Hive have?'])
++            ->assertOk();
++
++        $this->assertStringContainsString('Enterprise Platform Modules', $response->json('content'));
++    }
++
+     public function test_it_answers_where_a_page_lives_with_a_real_route(): void
+     {
+         $user = $this->userWith(['view_attendance', 'manage_attendance']);
+diff --git a/Modules/SupportBot/tests/Feature/PublicSupportWidgetTest.php b/Modules/SupportBot/tests/Feature/PublicSupportWidgetTest.php
+index f8ee63013..27e13d60a 100644
+--- a/Modules/SupportBot/tests/Feature/PublicSupportWidgetTest.php
++++ b/Modules/SupportBot/tests/Feature/PublicSupportWidgetTest.php
+@@ -3,6 +3,7 @@
+ namespace Modules\SupportBot\Tests\Feature;
+ 
+ use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Support\Facades\Http;
+ use Modules\SupportBot\Models\SupportBot;
+ use Modules\SupportBot\Models\SupportBotConversation;
+ use Modules\SupportBot\Models\SupportBotKnowledgeBase;
+@@ -90,6 +91,32 @@ public function test_an_explicit_module_overview_remains_available(): void
+         $this->assertStringContainsString('Enterprise Platform Modules', $response->json('data.messages.0.content'));
+     }
+ 
++    public function test_a_matching_platform_guide_does_not_send_unrelated_faqs_to_the_model(): void
++    {
++        $this->bot->update(['llm_provider' => 'gemini', 'llm_api_key' => 'test-key']);
++        $this->mock(SupportBotKnowledgeService::class, function ($mock): void {
++            $mock->shouldReceive('searchRelevantArticles')->andReturn([
++                ['title' => 'Legacy FAQ', 'answer' => str_repeat('IRRELEVANT_OLD_CONTEXT ', 500)],
++            ]);
++        });
++        $this->mock(ErpKnowledgeIndex::class, function ($mock): void {
++            $mock->shouldReceive('publicSearch')->andReturn(collect([[
++                'title' => 'Procurement Management', 'href' => '/dashboard/procurement',
++                'body' => 'Actual verified procurement guide: requisitions and purchase orders.',
++            ]]));
++        });
++        Http::fake(['*' => Http::response([
++            'candidates' => [['content' => ['parts' => [['text' => 'Procurement manages requisitions and purchase orders.']]]]],
++        ])]);
++        $session = $this->startPublicSession();
++        $this->postJson("/api/v1/public/support-bot/{$this->bot->slug}/chat", [
++            'session_id' => $session['session_id'], 'session_token' => $session['session_token'],
++            'message' => 'What is the Procurement module?',
++        ])->assertOk()->assertJsonPath('data.messages.0.content', 'Procurement manages requisitions and purchase orders.');
++        Http::assertSent(fn ($request) => str_contains($request->body(), 'Actual verified procurement guide')
++            && ! str_contains($request->body(), 'IRRELEVANT_OLD_CONTEXT'));
++    }
++
+     public function test_config_is_available_without_authentication(): void
+     {
+         $this->getJson("/api/v1/public/support-bot/{$this->bot->slug}/config")
+diff --git a/config/services.php b/config/services.php
+index 919c66ca6..4c811261c 100644
+--- a/config/services.php
++++ b/config/services.php
+@@ -63,6 +63,8 @@
+ 
+     'ollama' => [
+         'base_url' => env('OLLAMA_BASE_URL', 'http://localhost:11434/v1'),
++        'num_thread' => env('OLLAMA_NUM_THREAD', 2),
++        'num_ctx' => env('OLLAMA_CONTEXT_LENGTH', 2048),
+         // Comma-separated, exact base URLs that administrators may select.
+         // The primary OLLAMA_BASE_URL is always allowed automatically.
+         'allowed_base_urls' => array_values(array_filter(array_map(

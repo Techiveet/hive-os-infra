@@ -494,8 +494,10 @@ services:
 
   # Laravel Backend
   backend:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-eb98f5a98b0e96e58fed87e0fe2279f38c64668f}
-    pull_policy: always
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-e4c04df78cf5a5ad4456bc2d4fb6f01970eba174}
+    build:
+      context: ./ops/releases/queen-bee-e4c04df78
+    pull_policy: build
     container_name: hive-backend
     restart: unless-stopped
     deploy:
@@ -513,6 +515,8 @@ services:
     environment:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
@@ -621,8 +625,10 @@ services:
 
   # Queue Worker / Horizon
   queue:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-eb98f5a98b0e96e58fed87e0fe2279f38c64668f}
-    pull_policy: always
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-e4c04df78cf5a5ad4456bc2d4fb6f01970eba174}
+    build:
+      context: ./ops/releases/queen-bee-e4c04df78
+    pull_policy: build
     container_name: hive-queue
     restart: unless-stopped
     deploy:
@@ -640,6 +646,8 @@ services:
     environment:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
@@ -712,8 +720,10 @@ services:
   # Laravel scheduler (backups, trash purge, integrations sync, ...). The
   # legacy stack ran this as hive-scheduler; it was lost in the Coolify move.
   scheduler:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-eb98f5a98b0e96e58fed87e0fe2279f38c64668f}
-    pull_policy: always
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-e4c04df78cf5a5ad4456bc2d4fb6f01970eba174}
+    build:
+      context: ./ops/releases/queen-bee-e4c04df78
+    pull_policy: build
     container_name: hive-scheduler
     restart: unless-stopped
     deploy:
@@ -731,6 +741,8 @@ services:
     environment:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
@@ -795,8 +807,10 @@ services:
 
   # WebSocket Engine
   reverb:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-eb98f5a98b0e96e58fed87e0fe2279f38c64668f}
-    pull_policy: always
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-e4c04df78cf5a5ad4456bc2d4fb6f01970eba174}
+    build:
+      context: ./ops/releases/queen-bee-e4c04df78
+    pull_policy: build
     container_name: hive-reverb
     restart: unless-stopped
     deploy:
@@ -814,6 +828,8 @@ services:
     environment:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
