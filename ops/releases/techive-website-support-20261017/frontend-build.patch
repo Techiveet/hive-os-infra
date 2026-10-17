@@ -1,0 +1,21 @@
+--- a/next.config.ts
++++ b/next.config.ts
+@@ -46,6 +46,7 @@
+ 
+ const nextConfig: NextConfig = {
+   output: "standalone",
++  experimental: { cpus: 1, webpackBuildWorker: true, webpackMemoryOptimizations: true },
+   poweredByHeader: false,
+   typescript: {
+     ignoreBuildErrors: skipBuildTypecheck,
+--- a/Dockerfile.prod
++++ b/Dockerfile.prod
+@@ -50,7 +50,7 @@
+     NEXT_SKIP_BUILD_TYPECHECK=$NEXT_SKIP_BUILD_TYPECHECK
+ 
+ # Build the application
+-RUN npx next build
++RUN NODE_OPTIONS=--max-old-space-size=2048 RAYON_NUM_THREADS=2 npx next build --webpack
+ 
+ # Production image, copy all the files and run next
+ FROM base AS runner
