@@ -494,7 +494,7 @@ services:
 
   # Laravel Backend
   backend:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-da38ac0a0196ddc696bf31435dc00c338672a45a}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-eb98f5a98b0e96e58fed87e0fe2279f38c64668f}
     pull_policy: always
     container_name: hive-backend
     restart: unless-stopped
@@ -513,10 +513,13 @@ services:
     environment:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
-      COPILOT_MODEL: ${COPILOT_MODEL:-qwen2.5:1.5b}
+      COPILOT_MODEL: ${COPILOT_MODEL:-qwen3.5:0.8b-q8_0}
+      COPILOT_REPLY_MAX_TOKENS: ${COPILOT_REPLY_MAX_TOKENS:-128}
+      COPILOT_PHRASING_MAX_TOKENS: ${COPILOT_PHRASING_MAX_TOKENS:-128}
+      COPILOT_PHRASING_TIMEOUT: ${COPILOT_PHRASING_TIMEOUT:-20}
       APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
       FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
       APP_KEY: ${APP_KEY:?APP_KEY must be set in .env}
@@ -618,7 +621,7 @@ services:
 
   # Queue Worker / Horizon
   queue:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-da38ac0a0196ddc696bf31435dc00c338672a45a}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-eb98f5a98b0e96e58fed87e0fe2279f38c64668f}
     pull_policy: always
     container_name: hive-queue
     restart: unless-stopped
@@ -637,10 +640,13 @@ services:
     environment:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
-      COPILOT_MODEL: ${COPILOT_MODEL:-qwen2.5:1.5b}
+      COPILOT_MODEL: ${COPILOT_MODEL:-qwen3.5:0.8b-q8_0}
+      COPILOT_REPLY_MAX_TOKENS: ${COPILOT_REPLY_MAX_TOKENS:-128}
+      COPILOT_PHRASING_MAX_TOKENS: ${COPILOT_PHRASING_MAX_TOKENS:-128}
+      COPILOT_PHRASING_TIMEOUT: ${COPILOT_PHRASING_TIMEOUT:-20}
       APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
       FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
       DB_CONNECTION: ${DB_CONNECTION:-pgsql}
@@ -706,7 +712,7 @@ services:
   # Laravel scheduler (backups, trash purge, integrations sync, ...). The
   # legacy stack ran this as hive-scheduler; it was lost in the Coolify move.
   scheduler:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-da38ac0a0196ddc696bf31435dc00c338672a45a}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-eb98f5a98b0e96e58fed87e0fe2279f38c64668f}
     pull_policy: always
     container_name: hive-scheduler
     restart: unless-stopped
@@ -725,10 +731,13 @@ services:
     environment:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
-      COPILOT_MODEL: ${COPILOT_MODEL:-qwen2.5:1.5b}
+      COPILOT_MODEL: ${COPILOT_MODEL:-qwen3.5:0.8b-q8_0}
+      COPILOT_REPLY_MAX_TOKENS: ${COPILOT_REPLY_MAX_TOKENS:-128}
+      COPILOT_PHRASING_MAX_TOKENS: ${COPILOT_PHRASING_MAX_TOKENS:-128}
+      COPILOT_PHRASING_TIMEOUT: ${COPILOT_PHRASING_TIMEOUT:-20}
       APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
       FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
       DB_CONNECTION: ${DB_CONNECTION:-pgsql}
@@ -786,7 +795,7 @@ services:
 
   # WebSocket Engine
   reverb:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-da38ac0a0196ddc696bf31435dc00c338672a45a}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-eb98f5a98b0e96e58fed87e0fe2279f38c64668f}
     pull_policy: always
     container_name: hive-reverb
     restart: unless-stopped
@@ -805,10 +814,13 @@ services:
     environment:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
       OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
-      COPILOT_MODEL: ${COPILOT_MODEL:-qwen2.5:1.5b}
+      COPILOT_MODEL: ${COPILOT_MODEL:-qwen3.5:0.8b-q8_0}
+      COPILOT_REPLY_MAX_TOKENS: ${COPILOT_REPLY_MAX_TOKENS:-128}
+      COPILOT_PHRASING_MAX_TOKENS: ${COPILOT_PHRASING_MAX_TOKENS:-128}
+      COPILOT_PHRASING_TIMEOUT: ${COPILOT_PHRASING_TIMEOUT:-20}
       APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
       FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
       DB_CONNECTION: ${DB_CONNECTION:-pgsql}
