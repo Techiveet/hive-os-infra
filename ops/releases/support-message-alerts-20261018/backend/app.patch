@@ -1,0 +1,909 @@
+diff --git a/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php b/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
+index f897a78c5..a8fa0a72b 100644
+--- a/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
++++ b/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
+@@ -7,9 +7,9 @@
+ use Illuminate\Support\Facades\DB;
+ use Illuminate\Support\Facades\Redis;
+ use Illuminate\Support\Facades\Schema;
+-use Illuminate\Support\Str;
+ use Modules\Core\Models\Activity;
+ use Modules\Core\Models\SystemAlert;
++use Modules\Core\Support\ModuleRegistry;
+ use Modules\Identity\Models\Permission;
+ use Modules\Identity\Models\Role;
+ use Modules\Identity\Models\User;
+@@ -431,59 +431,7 @@ private function buildBusinessMetrics(): array
+ 
+     private function buildModuleMetrics($activityRows, bool $isSuperAdmin, ?string $tenantId): array
+     {
+-        $catalog = collect(TenantModuleCatalog::catalogWithPricing())
+-            ->unique('slug')
+-            ->map(fn (array $module): array => array_merge($module, [
+-                'registry_enabled' => false,
+-                'is_subscription_catalog' => true,
+-            ]))
+-            ->keyBy('slug');
+-        $registryAliases = [
+-            'LearningManagement' => 'learning_management',
+-            'MailBox' => 'mailbox',
+-            'B2BMarketplace' => 'b2b_marketplace',
+-            'Inventory' => 'inventory_control',
+-            'Warehouse' => 'warehouse_management',
+-            'Production' => 'production_management',
+-            'Workflow' => 'workflow_automation',
+-            'ProjectManagement' => 'project_management',
+-            'HumanResources' => 'human_resources',
+-            'Attendance' => 'attendance_management',
+-            'Payroll' => 'payroll_management',
+-            'Finance' => 'financial_management',
+-            'PerformanceManagement' => 'performance_management',
+-            'ProcurementManagement' => 'procurement_management',
+-            'SupplyChain' => 'supply_chain_management',
+-            'Sales' => 'sales_management',
+-            'Crm' => 'crm',
+-            'Fleet' => 'fleet_management',
+-            'ServiceManagement' => 'service_management',
+-            'InternalAudit' => 'internal_audit',
+-            'StrategicPlanning' => 'strategic_planning',
+-            'Vantage' => 'vantage_bi',
+-            'Agriculture' => 'agriculture',
+-            'LandingTemplates' => 'premium_landing_templates',
+-            'SupportBot' => 'support_bot',
+-        ];
+-        $registeredModules = json_decode((string) @file_get_contents(base_path('modules_statuses.json')), true);
+-        foreach (is_array($registeredModules) ? $registeredModules : [] as $moduleName => $enabled) {
+-            $slug = $registryAliases[$moduleName] ?? Str::snake($moduleName);
+-            if ($catalog->has($slug)) {
+-                $catalog->put($slug, array_merge($catalog->get($slug), ['registry_enabled' => (bool) $enabled]));
+-
+-                continue;
+-            }
+-
+-            $catalog->put($slug, [
+-                'slug' => $slug,
+-                'name' => Str::headline($moduleName),
+-                'category' => 'Platform',
+-                'monthly_price_etb' => 0,
+-                'registry_enabled' => (bool) $enabled,
+-                'is_subscription_catalog' => false,
+-            ]);
+-        }
+-        $catalog = $catalog->values();
++        $catalog = app(ModuleRegistry::class)->catalog();
+         $entitlementCounts = array_fill_keys($catalog->pluck('slug')->all(), 0);
+ 
+         if ($isSuperAdmin || $tenantId !== null) {
+diff --git a/Modules/Core/app/Support/ModuleRegistry.php b/Modules/Core/app/Support/ModuleRegistry.php
+index 5c224fecd..f29ccac05 100644
+--- a/Modules/Core/app/Support/ModuleRegistry.php
++++ b/Modules/Core/app/Support/ModuleRegistry.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Modules\Core\Support;
+ 
++use Illuminate\Support\Collection;
++use Illuminate\Support\Str;
++use Modules\Subscription\Support\TenantModuleCatalog;
++
+ class ModuleRegistry
+ {
+     public function __construct(
+@@ -13,6 +17,65 @@ public function all(): array
+         return $this->modules ?? config('modular_monolith.modules', []);
+     }
+ 
++    /** The same registered product catalog used by the dashboard and assistant. */
++    public function catalog(): Collection
++    {
++        $catalog = collect(TenantModuleCatalog::catalogWithPricing())
++            ->unique('slug')
++            ->map(fn (array $module): array => array_merge($module, [
++                'registry_enabled' => false,
++                'is_subscription_catalog' => true,
++            ]))
++            ->keyBy('slug');
++        $registryAliases = [
++            'LearningManagement' => 'learning_management',
++            'MailBox' => 'mailbox',
++            'B2BMarketplace' => 'b2b_marketplace',
++            'Inventory' => 'inventory_control',
++            'Warehouse' => 'warehouse_management',
++            'Production' => 'production_management',
++            'Workflow' => 'workflow_automation',
++            'ProjectManagement' => 'project_management',
++            'HumanResources' => 'human_resources',
++            'Attendance' => 'attendance_management',
++            'Payroll' => 'payroll_management',
++            'Finance' => 'financial_management',
++            'PerformanceManagement' => 'performance_management',
++            'ProcurementManagement' => 'procurement_management',
++            'SupplyChain' => 'supply_chain_management',
++            'Sales' => 'sales_management',
++            'Crm' => 'crm',
++            'Fleet' => 'fleet_management',
++            'ServiceManagement' => 'service_management',
++            'InternalAudit' => 'internal_audit',
++            'StrategicPlanning' => 'strategic_planning',
++            'Vantage' => 'vantage_bi',
++            'Agriculture' => 'agriculture',
++            'LandingTemplates' => 'premium_landing_templates',
++            'SupportBot' => 'support_bot',
++        ];
++        $registeredModules = json_decode((string) @file_get_contents(base_path('modules_statuses.json')), true);
++        foreach (is_array($registeredModules) ? $registeredModules : [] as $moduleName => $enabled) {
++            $slug = $registryAliases[$moduleName] ?? Str::snake($moduleName);
++            if ($catalog->has($slug)) {
++                $catalog->put($slug, array_merge($catalog->get($slug), ['registry_enabled' => (bool) $enabled]));
++
++                continue;
++            }
++
++            $catalog->put($slug, [
++                'slug' => $slug,
++                'name' => Str::headline($moduleName),
++                'category' => 'Platform',
++                'monthly_price_etb' => 0,
++                'registry_enabled' => (bool) $enabled,
++                'is_subscription_catalog' => false,
++            ]);
++        }
++
++        return $catalog->values();
++    }
++
+     public function get(string $key): ?array
+     {
+         return $this->all()[$key] ?? null;
+diff --git a/Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php b/Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php
+index e0514080e..dce6643d2 100644
+--- a/Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php
++++ b/Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php
+@@ -67,6 +67,7 @@ public function script(Request $request, string $slug): Response
+                 $bot->primary_color ?: '#3b82f6',
+                 (string) $bot->slug,
+                 (string) ($bot->name ?: 'Assistant'),
++                substr(hash('sha256', (string) $bot->updated_at), 0, 12),
+             ),
+             200,
+             [
+@@ -192,18 +193,21 @@ private function buildScript(
+         string $color,
+         string $slug,
+         string $name,
++        string $version,
+     ): string {
+         $embedUrlJs = json_encode($embedUrl);
+         $originJs = json_encode($origin);
+         $colorJs = json_encode($color);
+         $slugJs = json_encode($slug);
+         $nameJs = json_encode($name);
++        $versionJs = json_encode($version);
+ 
+         return <<<JS
+ (function () {
+   "use strict";
+ 
+   var EMBED_URL = {$embedUrlJs};
++  var WIDGET_VERSION = {$versionJs};
+   var ORIGIN = {$originJs};
+   var COLOR = {$colorJs};
+   var SLUG = {$slugJs};
+@@ -269,6 +273,11 @@ function applySize() {
+     frame.style.width = size.width;
+     frame.style.height = size.height;
+     frame.style.pointerEvents = (!isOpen && hideLauncher) ? "none" : "auto";
++    if (hideLauncher) {
++      frame.tabIndex = isOpen ? 0 : -1;
++      frame.inert = !isOpen;
++      frame.setAttribute("aria-hidden", String(!isOpen));
++    }
+   }
+ 
+   function setOpen(open) {
+@@ -294,7 +303,8 @@ function mount() {
+     frame.title = NAME;
+     frame.setAttribute("allow", "microphone");
+     frame.setAttribute("aria-label", NAME);
+-    frame.src = EMBED_URL + "?host=" + encodeURIComponent(location.origin);
++    // A changed bot configuration must not reuse a stale framed response.
++    frame.src = EMBED_URL + "?host=" + encodeURIComponent(location.origin) + "&v=" + WIDGET_VERSION;
+ 
+     var s = frame.style;
+     s.position = "fixed";
+diff --git a/Modules/SupportBot/app/Models/SupportBot.php b/Modules/SupportBot/app/Models/SupportBot.php
+index 8f33f863e..2ef4bca7e 100644
+--- a/Modules/SupportBot/app/Models/SupportBot.php
++++ b/Modules/SupportBot/app/Models/SupportBot.php
+@@ -97,7 +97,7 @@ protected static function booted(): void
+      */
+     public const WIDGET_CONFIG_PUBLIC_KEYS = [
+         'position', 'title', 'subtitle', 'show_avatar', 'launcher_label',
+-        'placeholder', 'theme', 'bubble_icon', 'offline_message',
++        'placeholder', 'theme', 'bubble_icon', 'offline_message', 'suggested_questions',
+     ];
+ 
+     /**
+diff --git a/Modules/SupportBot/app/Notifications/SupportInboxNotification.php b/Modules/SupportBot/app/Notifications/SupportInboxNotification.php
+new file mode 100644
+index 000000000..2beec6143
+--- /dev/null
++++ b/Modules/SupportBot/app/Notifications/SupportInboxNotification.php
+@@ -0,0 +1,31 @@
++<?php
++
++namespace Modules\SupportBot\Notifications;
++
++use Illuminate\Notifications\Messages\BroadcastMessage;
++use Illuminate\Notifications\Notification;
++
++class SupportInboxNotification extends Notification
++{
++    public function __construct(public readonly array $details) {}
++
++    public function via(object $notifiable): array
++    {
++        return ['broadcast'];
++    }
++
++    public function toArray(object $notifiable): array
++    {
++        return $this->details;
++    }
++
++    public function toBroadcast(object $notifiable): BroadcastMessage
++    {
++        return (new BroadcastMessage([
++            'id' => $this->id,
++            'type' => static::class,
++            'data' => $this->details,
++            'created_at' => now()->toISOString(),
++        ]))->onConnection('sync');
++    }
++}
+diff --git a/Modules/SupportBot/app/Providers/SupportBotServiceProvider.php b/Modules/SupportBot/app/Providers/SupportBotServiceProvider.php
+index 18a2b8a27..2691feda6 100644
+--- a/Modules/SupportBot/app/Providers/SupportBotServiceProvider.php
++++ b/Modules/SupportBot/app/Providers/SupportBotServiceProvider.php
+@@ -2,15 +2,26 @@
+ 
+ namespace Modules\SupportBot\Providers;
+ 
++use Illuminate\Support\Facades\Event;
+ use Modules\SupportBot\Console\BenchmarkOllamaModelsCommand;
+ use Modules\SupportBot\Console\CompareEmbeddingModelsCommand;
+ use Modules\SupportBot\Console\EmbedErpKnowledgeCommand;
+ use Modules\SupportBot\Console\IndexErpKnowledgeCommand;
+ use Modules\SupportBot\Console\LearnFromConversationsCommand;
++use Modules\SupportBot\Events\SupportBotMessageBroadcast;
++use Modules\SupportBot\Events\SupportConversationEscalated;
++use Modules\SupportBot\Services\SupportInboxNotifier;
+ use Nwidart\Modules\Support\ModuleServiceProvider;
+ 
+ class SupportBotServiceProvider extends ModuleServiceProvider
+ {
++    public function boot(): void
++    {
++        parent::boot();
++        Event::listen(SupportBotMessageBroadcast::class, fn ($event) => rescue(fn () => app(SupportInboxNotifier::class)->message($event)));
++        Event::listen(SupportConversationEscalated::class, fn ($event) => rescue(fn () => app(SupportInboxNotifier::class)->escalated($event)));
++    }
++
+     protected string $name = 'SupportBot';
+ 
+     protected string $nameLower = 'support_bot';
+diff --git a/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php b/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
+index 88bea7e26..f32500b90 100644
+--- a/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
++++ b/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
+@@ -410,6 +410,12 @@ private function speaksLanguageOf(SupportBot $bot, string $message): bool
+ 
+     private function worthPhrasing(string $grounded, string $mode, array $payload): bool
+     {
++        // The retrieved purpose is already a short answer to a definition.
++        // Rewriting it from page guides can turn it back into navigation or add facts.
++        if (($payload['answer_kind'] ?? null) === 'module_explanation') {
++            return false;
++        }
++
+         if (mb_strlen($grounded) < self::MIN_LENGTH_TO_PHRASE) {
+             return false;
+         }
+diff --git a/Modules/SupportBot/app/Services/Copilot/CopilotService.php b/Modules/SupportBot/app/Services/Copilot/CopilotService.php
+index 4b5767041..2adc7dde9 100644
+--- a/Modules/SupportBot/app/Services/Copilot/CopilotService.php
++++ b/Modules/SupportBot/app/Services/Copilot/CopilotService.php
+@@ -320,6 +320,16 @@ private function handleGuidance(string $message, CopilotContext $context, array
+         // the same words as the page they belong to, and taking only three
+         // could leave no page document in the set to prefer.
+         $documents = $this->knowledge->search($message, $context, 8);
++        $tool = $route['tool'];
++        $page = $tool !== null ? $this->knowledge->pageForTool($tool, $context) : null;
++        if ($page !== null) {
++            // Ranking may prefer Production for a question about a product.
++            // The resolved action's page is authoritative, and unrelated
++            // modules must not enter the answer's rewriting context.
++            $documents = collect([$page])->concat($documents
++                ->where('module', $page['module'])
++                ->reject(fn (array $document) => $document['doc_key'] === $page['doc_key']))->values();
++        }
+         $this->currentFacts = $documents->all();
+ 
+         if ($documents->isEmpty()) {
+@@ -332,8 +342,6 @@ private function handleGuidance(string $message, CopilotContext $context, array
+             ?? $documents->firstWhere('kind', 'module')
+             ?? $documents->first();
+ 
+-        $tool = $route['tool'];
+-
+         $body = $this->documentBody($primary, $context);
+ 
+         // If the assistant could also just do it, say so — but only when the
+@@ -356,13 +364,26 @@ private function handleGuidance(string $message, CopilotContext $context, array
+     private function handleInformation(string $message, CopilotContext $context): array
+     {
+         if ($this->isModuleOverviewQuestion($message)) {
+-            return $this->describeModules($context);
++            return $this->describeModules($context, $message);
+         }
+ 
+         if ($this->isCapabilityQuestion($message)) {
+             return $this->describeCapabilities($context);
+         }
+ 
++        if (($module = $this->knowledge->moduleExplanation($message, $context)) !== null) {
++            $this->currentFacts = [$module];
++
++            return $this->reply('**'.$module['title']."**\n\n".$module['summary'], 'information', $context, [
++                'answer_kind' => 'module_explanation',
++                'follow_ups' => ['Where can I find '.$module['title'].'?', 'What modules does Hive have?'],
++                'sources' => $this->sources(collect([$module])),
++                'navigation' => $module['href'] ? [[
++                    'label' => 'Open '.$module['title'], 'href' => $module['href'], 'module' => $module['module'],
++                ]] : [],
++            ]);
++        }
++
+         $documents = $this->knowledge->search($message, $context, 4);
+         $this->currentFacts = $documents->all();
+ 
+@@ -1081,42 +1102,15 @@ private function unsupportedAction(string $message, CopilotContext $context): ar
+         return $this->notCovered($message, $context);
+     }
+ 
+-    private function describeModules(CopilotContext $context): array
++    private function describeModules(CopilotContext $context, string $message): array
+     {
+-        $text = "🏢 **HIVE.OS Enterprise Platform Modules**:\n\n"
+-            ."HIVE.OS includes **32 integrated enterprise modules** organized across key operational pillars:\n\n"
+-            ."• **Operations & Commerce**: [Inventory Catalog](/dashboard/inventory/catalog/products), [Warehouse](/dashboard/warehouse), [POS Terminal](/dashboard/pos), [B2B Marketplace](/dashboard/marketplace), [Sales](/dashboard/finance/sales)\n"
+-            ."• **Finance & Tax**: [Accounting & General Ledger](/dashboard/finance/general-ledger), [Invoicing](/dashboard/finance/sales), [Ethiopian Payroll & Tax](/dashboard/payroll), [Treasury](/dashboard/treasury)\n"
+-            ."• **Workforce & HR**: [Employee Directory](/dashboard/hr/employees), [Attendance & Biometrics](/dashboard/attendance), [Leaves](/dashboard/leave), [Recruitment](/dashboard/recruitment)\n"
+-            ."• **Hospitality & Food**: [Waiter POS](/dashboard/hospitality/waiter-pos), [Kitchen Display (KDS)](/dashboard/hospitality/kds), [Room Booking](/dashboard/hospitality/rooms)\n"
+-            ."• **Manufacturing & Fleet**: [Bill of Materials (BOM)](/dashboard/production), [Work Orders](/dashboard/production/orders), [Fleet & Telemetry](/dashboard/fleet)\n"
+-            ."• **Automation & AI**: [AI Support Bot Studio](/dashboard/support-bot), [CRM & Campaigns](/dashboard/crm), [Project Management](/dashboard/projects)\n\n"
+-            .'Ask me about any specific module, or click a quick action below to explore!';
++        $overview = $this->knowledge->moduleOverview($message);
+ 
+-        return $this->reply(
+-            $text,
+-            'information',
+-            $context,
+-            [
+-                'total_modules' => 32,
+-                'action_buttons' => [
+-                    ['label' => 'Explore Products Catalog', 'url' => '/dashboard/inventory/catalog/products'],
+-                    ['label' => 'Open Payroll Hub', 'url' => '/dashboard/payroll'],
+-                    ['label' => 'Open Hospitality KDS', 'url' => '/dashboard/hospitality/kds'],
+-                ],
+-                // Read straight off the live introspection rather than
+-                // retrieved, so there is no relevance score to judge it by and
+-                // nothing to be uncertain about. Saying so keeps a correct
+-                // answer out of the "questions nobody could answer" queue.
+-                'authoritative' => true,
+-                'follow_ups' => [
+-                    'How to Create a Product?',
+-                    'How to Create an Invoice?',
+-                    'Calculate Salary Tax',
+-                    'How do Table Orders Work on Waiter POS?',
+-                ],
+-            ],
+-        );
++        return $this->reply($overview['content'], 'information', $context, [
++            'total_modules' => $overview['total_modules'],
++            'authoritative' => true,
++            'follow_ups' => ['What is the Procurement module?', 'What is the Payroll module?'],
++        ]);
+     }
+ 
+     private function describeCapabilities(CopilotContext $context): array
+@@ -1283,7 +1277,9 @@ private function toolMentionScore(string $message, array $tool): int
+     private function isModuleOverviewQuestion(string $message): bool
+     {
+         $normalised = Str::lower($message);
+-        $hasModule = Str::contains($normalised, ['module', 'modul', 'ሞጁል']);
++        $hasModule = preg_match('/\bmodules\b|ሞጁሎች/u', $normalised) === 1
++            || (preg_match('/\b(?:how many|list|all)\b/u', $normalised) === 1
++                && preg_match('/\bmodul[a-z]*\b/u', $normalised) === 1);
+         $hasQuestion = Str::contains($normalised, ['how many', 'what', 'which', 'list', 'all', 'exist', 'have', 'count', 'show', 'ስንት']);
+ 
+         return $hasModule && $hasQuestion;
+diff --git a/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php b/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
+index 1479de108..b3ee5f807 100644
+--- a/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
++++ b/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
+@@ -4,6 +4,7 @@
+ 
+ use Illuminate\Support\Collection;
+ use Illuminate\Support\Str;
++use Modules\Core\Support\ModuleRegistry;
+ use Modules\SupportBot\Models\CopilotKnowledgeDocument;
+ 
+ /**
+@@ -199,6 +200,80 @@ public function publicSearch(string $query, int $limit = 3): Collection
+             ->values();
+     }
+ 
++    /** A routed task has a known page; a related guide must not displace it. */
++    public function pageForTool(array $tool, CopilotContext $context): ?array
++    {
++        if (empty($tool['target_url'])) {
++            return null;
++        }
++        $document = CopilotKnowledgeDocument::query()
++            ->visibleTo($context->permissions(), $context->isCentral() ? 'central' : 'tenant', $context->enabledModules())
++            ->where('kind', 'submodule')->where('href', $tool['target_url'])->first();
++        if ($document === null) {
++            return null;
++        }
++
++        return [
++            'doc_key' => $document->doc_key, 'kind' => $document->kind,
++            'module' => $document->module, 'submodule' => $document->submodule,
++            'title' => $document->title, 'summary' => $document->summary,
++            'body' => $document->body, 'href' => $document->href, 'score' => 100,
++        ];
++    }
++
++    /** Counts and lists come from the dashboard's catalog, not a hardcoded answer. */
++    public function moduleOverview(string $query): array
++    {
++        $catalog = app(ModuleRegistry::class)->catalog();
++        $count = $catalog->count();
++        $content = "**HIVE.OS Enterprise Platform Modules**\n\nHive has **{$count} registered modules**. "
++            .'Your subscription and permissions determine which ones you can use.';
++        if (! preg_match('/how many|count|ስንት/iu', $query)) {
++            $content .= "\n\n".$catalog->pluck('name')->sort()->map(fn ($name) => '- '.$name)->implode("\n");
++        }
++
++        return ['content' => $content, 'total_modules' => $count];
++    }
++
++    /** A definition needs the named module's purpose, not a high-ranking screen guide. */
++    public function moduleExplanation(string $query, ?CopilotContext $context = null): ?array
++    {
++        $question = Str::lower(trim($query, " \t\n\r\0\x0B?!."));
++        if (! preg_match('/^(?:please\s+)?(?:what (?:is|does)|how does|explain|describe)\s+(?:the\s+)?(.+)$/u', $question, $match)) {
++            return null;
++        }
++        $subject = preg_replace('/\s+(?:briefly|in simple terms)$/u', '', $match[1]);
++        $subject = preg_replace('/\s+(?:module(?:\s+(?:do|work))?|work|do)(?:\s+in\s+hive(?:\.os)?)?$/u', '', $subject);
++        $subject = preg_replace('/\s+module\b.*$/u', '', $subject);
++        $documents = CopilotKnowledgeDocument::query()->where('kind', 'module')->where('doc_key', 'like', 'module:%');
++        if ($context !== null) {
++            $documents->visibleTo($context->permissions(), $context->isCentral() ? 'central' : 'tenant', $context->enabledModules());
++        } else {
++            $documents->whereIn('audience', ['tenant', 'all']);
++        }
++        foreach ($documents->get() as $document) {
++            $names = [$document->title, Str::headline($document->module)];
++            $names[] = preg_replace('/\s+management$/iu', '', $document->title);
++            // Aliases help with an explicitly named module; a screen name alone
++            // (for example invoice matching) must retain its more specific guide.
++            if (preg_match('/\bmodule\b/u', $question)) {
++                $names = array_merge($names, $document->keywords ?? []);
++            }
++            if (! in_array($subject, array_map(fn ($name) => Str::lower(trim($name)), $names), true)) {
++                continue;
++            }
++
++            return [
++                'doc_key' => $document->doc_key, 'kind' => 'module',
++                'module' => $document->module, 'submodule' => null,
++                'title' => $document->title, 'summary' => $document->summary,
++                'body' => $document->body, 'href' => $document->href, 'score' => 100,
++            ];
++        }
++
++        return null;
++    }
++
+     /**
+      * The single best module match for a query, used to answer "how does X
+      * work" and to scope navigation answers.
+diff --git a/Modules/SupportBot/app/Services/SupportBotEngineService.php b/Modules/SupportBot/app/Services/SupportBotEngineService.php
+index d4049717f..243dae37f 100644
+--- a/Modules/SupportBot/app/Services/SupportBotEngineService.php
++++ b/Modules/SupportBot/app/Services/SupportBotEngineService.php
+@@ -348,6 +348,35 @@ public function lastInteractionId(): ?int
+ 
+     private ?int $lastInteractionId = null;
+ 
++    /** Answers a business website from that bot's own published knowledge. */
++    private function resolveCustomerSupportMessage(SupportBot $bot, SupportBotConversation $conversation, string $userText): array
++    {
++        $suggestions = array_values(array_filter($bot->widget_config['suggested_questions'] ?? [], 'is_string'));
++        $payload = ['quick_replies' => array_slice($suggestions, 0, 4)];
++        if (preg_match('/^(hi|hello|hey|good morning|good afternoon|good evening)[!.\s]*$/iu', trim($userText))) {
++            $content = $bot->greeting_message ?: 'Hello! How can I help?';
++        } else {
++            $matches = $this->knowledgeService->search($bot, $userText, 1);
++            $best = $matches[0] ?? null;
++            if ($best !== null) {
++                $content = $best['answer'];
++                $payload['source_kb'] = $best['title'];
++                $source = $best['source_url'] ?? null;
++                if (is_string($source) && filter_var($source, FILTER_VALIDATE_URL) && parse_url($source, PHP_URL_SCHEME) === 'https') {
++                    $payload['action_buttons'] = [['label' => 'Source: '.$best['title'], 'url' => $source]];
++                }
++            } else {
++                $content = $bot->fallback_message ?: 'I could not find a verified answer. Please ask our support team.';
++                $payload['unanswered'] = true;
++            }
++        }
++
++        return [SupportBotMessage::create([
++            'conversation_id' => $conversation->id, 'sender_type' => 'bot',
++            'sender_name' => $bot->name, 'content' => $content, 'payload' => $payload,
++        ])];
++    }
++
+     protected function resolveMessage(SupportBot $bot, SupportBotConversation $conversation, string $userText): array
+     {
+         $lowerText = strtolower(trim($userText));
+@@ -378,17 +407,19 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+                 'content' => 'You are in the queue for our support team. Their reply will appear here. You can return to the assistant at any time.',
+                 'payload' => [
+                     'escalated' => true,
+-                    'quick_replies' => [
+-                        'Back to AI Copilot',
+-                        'How to Create a Product?',
+-                        'Calculate Salary Tax',
+-                    ],
++                    'quick_replies' => ! $bot->featureFlags()['erp_navigation']
++                        ? array_slice($bot->widget_config['suggested_questions'] ?? [], 0, 4)
++                        : ['Back to AI Copilot', 'How to Create a Product?', 'Calculate Salary Tax'],
+                 ],
+             ]);
+ 
+             return [$escalateMsg];
+         }
+ 
++        if (! $bot->featureFlags()['erp_navigation']) {
++            return $this->resolveCustomerSupportMessage($bot, $conversation, $userText);
++        }
++
+         // 2. Comprehensive Step-by-Step ERP Guide & Workflow Dependency Engine
+         if ($guide = $this->matchErpCreationGuide($lowerText)) {
+             $guideMsg = SupportBotMessage::create([
+@@ -477,17 +508,22 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+             return [$convMsg];
+         }
+ 
+-        // 6. Query RAG Knowledge Base
+-        $ragResult = $this->knowledgeService->searchRelevantArticles($bot, $userText);
++        // Definitions use the named module's purpose before ranking screen guides or FAQs.
++        if (($module = $this->platformKnowledge->moduleExplanation($userText)) !== null) {
++            return [SupportBotMessage::create([
++                'conversation_id' => $conversation->id,
++                'sender_type' => 'bot', 'sender_name' => $bot->name ?? 'HIVE.OS Copilot',
++                'content' => '**'.$module['title']."**\n\n".$module['summary'],
++                'payload' => [
++                    'answer_kind' => 'module_explanation', 'source_kb' => $module['title'],
++                    'action_buttons' => $module['href'] ? [['label' => 'Open '.$module['title'], 'url' => $module['href']]] : [],
++                    'quick_replies' => ['Talk to a person', 'What modules does Hive have?'],
++                ],
++            ])];
++        }
+ 
+-        // 6b. And the platform's own generated documentation.
+-        //
+-        // Retrieved *before* the model is asked, not merely as a fallback after
+-        // it fails. Left to answer unaided, a small local model produces a
+-        // fluent description of a Procurement module it has imagined — the
+-        // shape of the answer is right and the content is invented. Handing it
+-        // the real document first makes the model a writer rather than a
+-        // source, which is the same inversion the in-app Copilot relies on.
++        // 6. Retrieve facts before asking the model to write an answer.
++        $ragResult = $this->knowledgeService->searchRelevantArticles($bot, $userText);
+         $platform = $this->answerFromPlatformKnowledge($userText);
+ 
+         // 7. Query LLM if a provider is configured — and if there is something
+@@ -508,7 +544,10 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+             $context = is_array($ragResult) ? $ragResult : [];
+ 
+             if ($platform !== null) {
+-                array_unshift($context, [
++                // A matched platform guide is authoritative for ERP questions.
++                // Loose FAQ hits often contain unrelated legacy instructions;
++                // mixing them in overwhelms a small local model's context.
++                $context = [[
+                     'title' => $platform['title'],
+                     // Trimmed to the conversational part of the document —
+                     // purpose and navigation — not the exhaustive endpoint,
+@@ -518,7 +557,7 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+                     // out. The full, untrimmed document is still what gets
+                     // shown verbatim if the LLM step is skipped entirely.
+                     'content' => Str::limit($platform['content'], 1400, ''),
+-                ]);
++                ]];
+             }
+ 
+             $llmResponseText = $this->llmService->generateResponse(
+@@ -991,7 +1030,7 @@ protected function matchModulesOverviewIntent(string $lower): ?array
+         // explicit overview request should return the general module directory.
+         $hasModuleKeyword = preg_match('/\bmodules\b|ሞጁሎች/u', $lower) === 1
+             || (preg_match('/\b(?:how many|list|all)\b/u', $lower) === 1
+-                && str_contains($lower, 'module'));
++                && preg_match('/\bmodul[a-z]*\b/u', $lower) === 1);
+         $hasCountOrList = str_contains($lower, 'how many') ||
+                           str_contains($lower, 'what') ||
+                           str_contains($lower, 'which') ||
+@@ -1004,29 +1043,11 @@ protected function matchModulesOverviewIntent(string $lower): ?array
+                           str_contains($lower, 'ሞጁል');
+ 
+         if ($hasModuleKeyword && $hasCountOrList) {
+-            $text = "🏢 **HIVE.OS Enterprise Platform Modules**:\n\n".
+-                "HIVE.OS includes **32 integrated enterprise modules** organized across key operational pillars:\n\n".
+-                "• **Operations & Commerce**: [Inventory Catalog](/dashboard/inventory/catalog/products), [Warehouse](/dashboard/warehouse), [POS Terminal](/dashboard/pos), [B2B Marketplace](/dashboard/marketplace), [Sales](/dashboard/finance/sales)\n".
+-                "• **Finance & Tax**: [Accounting & General Ledger](/dashboard/finance/general-ledger), [Invoicing](/dashboard/finance/sales), [Ethiopian Payroll & Tax](/dashboard/payroll), [Treasury](/dashboard/treasury)\n".
+-                "• **Workforce & HR**: [Employee Directory](/dashboard/hr/employees), [Attendance & Biometrics](/dashboard/attendance), [Leaves](/dashboard/leave), [Recruitment](/dashboard/recruitment)\n".
+-                "• **Hospitality & Food**: [Waiter POS](/dashboard/hospitality/waiter-pos), [Kitchen Display (KDS)](/dashboard/hospitality/kds), [Room Booking](/dashboard/hospitality/rooms)\n".
+-                "• **Manufacturing & Fleet**: [Bill of Materials (BOM)](/dashboard/production), [Work Orders](/dashboard/production/orders), [Fleet & Telemetry](/dashboard/fleet)\n".
+-                "• **Automation & AI**: [AI Support Bot Studio](/dashboard/support-bot), [CRM & Campaigns](/dashboard/crm), [Project Management](/dashboard/projects)\n\n".
+-                'Ask me about any specific module, or click a quick action below to explore!';
++            $overview = $this->platformKnowledge->moduleOverview($lower);
+ 
+             return [
+-                'content' => $text,
+-                'action_buttons' => [
+-                    ['label' => 'Explore Products Catalog', 'url' => '/dashboard/inventory/catalog/products'],
+-                    ['label' => 'Open Payroll Hub', 'url' => '/dashboard/payroll'],
+-                    ['label' => 'Open Hospitality KDS', 'url' => '/dashboard/hospitality/kds'],
+-                ],
+-                'quick_replies' => [
+-                    'How to Create a Product?',
+-                    'How to Create an Invoice?',
+-                    'Calculate Salary Tax',
+-                    'How do Table Orders Work on Waiter POS?',
+-                ],
++                'content' => $overview['content'],
++                'quick_replies' => ['What is the Procurement module?', 'What is the Payroll module?', 'Talk to a person'],
+             ];
+         }
+ 
+diff --git a/Modules/SupportBot/app/Services/SupportBotKnowledgeService.php b/Modules/SupportBot/app/Services/SupportBotKnowledgeService.php
+index 16862dc7b..1ee05fcff 100644
+--- a/Modules/SupportBot/app/Services/SupportBotKnowledgeService.php
++++ b/Modules/SupportBot/app/Services/SupportBotKnowledgeService.php
+@@ -28,8 +28,20 @@ public function search(SupportBot $bot, string $query, int $limit = 5): array
+             'any', 'all', 'use', 'using', 'like', 'work', 'works', 'hive',
+         ];
+ 
++        // A company name repeated in every FAQ is not evidence that an
++        // unrelated question is covered by this business's knowledge.
++        if (! $bot->featureFlags()['erp_navigation']) {
++            $stopWords = array_merge($stopWords, preg_split('/[^\pL\pN]+/u', mb_strtolower($bot->name)) ?: []);
++        }
++
++        // Visitors naturally end a topic with punctuation (for example,
++        // "office?"). Keep that punctuation out of business keyword matching.
++        $tokens = ! $bot->featureFlags()['erp_navigation']
++            ? (preg_split('/[^\pL\pN]+/u', $normalized) ?: [])
++            : explode(' ', $normalized);
++
+         $terms = array_values(array_filter(
+-            explode(' ', $normalized),
++            $tokens,
+             fn ($w) => mb_strlen($w) > 2 && ! in_array($w, $stopWords, true),
+         ));
+ 
+@@ -38,7 +50,7 @@ public function search(SupportBot $bot, string $query, int $limit = 5): array
+             now()->addMinutes(5),
+             fn () => $bot->knowledgeBases()
+                 ->where('is_enabled', true)
+-                ->get(['id', 'title', 'question', 'answer', 'category', 'tags']),
++                ->get(['id', 'title', 'question', 'answer', 'category', 'tags', 'source_url']),
+         );
+ 
+         if ($entries->isEmpty()) {
+@@ -101,6 +113,7 @@ public function search(SupportBot $bot, string $query, int $limit = 5): array
+                     'title' => $entry->title,
+                     'question' => $entry->question,
+                     'answer' => $entry->answer,
++                    'source_url' => $entry->source_url,
+                     'category' => $entry->category,
+                     'tags' => $entry->tags,
+                     'score' => $score,
+diff --git a/Modules/SupportBot/app/Services/SupportBotLlmService.php b/Modules/SupportBot/app/Services/SupportBotLlmService.php
+index 5d8815a3e..11b981347 100644
+--- a/Modules/SupportBot/app/Services/SupportBotLlmService.php
++++ b/Modules/SupportBot/app/Services/SupportBotLlmService.php
+@@ -84,6 +84,7 @@ public function lastError(): ?string
+ 1. Only answer questions about HIVE.OS, its modules, and Ethiopian business operations.
+ 2. Never invent module names, routes, or figures.
+ 3. Keep answers concise, helpful, and formatted with clean Markdown.
++   Use at most two short sentences and the most relevant exact page path unless the user asks for steps or a list.
+ 4. Never repeat words or phrases in loops.
+ 5. Write in the language named at the top of these instructions, and in no other. HIVE.OS supports English and Amharic only.
+ EOT;
+@@ -600,7 +601,7 @@ private function dispatch(
+         return $this->guard(match ($provider) {
+             'gemini' => $this->callGemini($apiKey, $model ?: self::DEFAULT_MODELS['gemini'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'groq' => $this->callOpenAiCompatible('https://api.groq.com/openai/v1', $apiKey, $model ?: self::DEFAULT_MODELS['groq'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+-            'ollama' => $this->callOpenAiCompatible($baseUrl, $apiKey ?: 'ollama-local', $model ?: self::DEFAULT_MODELS['ollama'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout, disableThinking: str_starts_with(strtolower($model ?? ''), 'qwen3')),
++            'ollama' => $this->callOllama($baseUrl, $apiKey, $model ?: self::DEFAULT_MODELS['ollama'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'openrouter' => $this->callOpenAiCompatible('https://openrouter.ai/api/v1', $apiKey, $model ?: self::DEFAULT_MODELS['openrouter'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'anthropic' => $this->callAnthropic($apiKey, $model ?: self::DEFAULT_MODELS['anthropic'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             default => $this->callOpenAiCompatible('https://api.openai.com/v1', $apiKey, $model ?: self::DEFAULT_MODELS['openai'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+@@ -796,6 +797,63 @@ protected function callGemini(
+         return null;
+     }
+ 
++    /** Native options keep CPU inference within the deployment's allocation. */
++    protected function callOllama(
++        string $baseUrl,
++        ?string $apiKey,
++        string $model,
++        string $systemPrompt,
++        array $history,
++        string $userMessage,
++        float $temperature,
++        int $maxTokens,
++        int $timeout,
++    ): ?string {
++        $messages = [['role' => 'system', 'content' => $systemPrompt]];
++        foreach ($history as $message) {
++            $messages[] = [
++                'role' => ($message['sender_type'] ?? 'visitor') === 'visitor' ? 'user' : 'assistant',
++                'content' => (string) ($message['content'] ?? ''),
++            ];
++        }
++        $messages[] = ['role' => 'user', 'content' => $userMessage];
++        $endpoint = preg_replace('~/v1$~', '', rtrim($baseUrl, '/')).'/api/chat';
++
++        try {
++            $request = Http::timeout($timeout)->connectTimeout(5)
++                ->retry(2, 300, self::retryUnlessTimedOut(...), throw: false);
++            if ($apiKey) {
++                $request = $request->withToken($apiKey);
++            }
++            $response = $request->post($endpoint, [
++                'model' => $model,
++                'messages' => $messages,
++                'stream' => false,
++                ...(str_starts_with(strtolower($model), 'qwen3') ? ['think' => false] : []),
++                'options' => [
++                    'temperature' => $temperature,
++                    'num_predict' => $maxTokens,
++                    'num_thread' => max(1, min(16, (int) config('services.ollama.num_thread', 2))),
++                    'num_ctx' => max(512, min(32768, (int) config('services.ollama.num_ctx', 2048))),
++                ],
++            ]);
++            if ($response->successful()) {
++                $text = $response->json('message.content');
++                if (is_string($text) && trim($text) !== '') {
++                    return $text;
++                }
++                $this->lastError = 'Ollama returned no completion text.';
++            } else {
++                $this->lastError = $this->describeHttpError($response->json(), $response->status());
++            }
++        } catch (\Throwable $exception) {
++            $this->lastError = 'Could not reach the configured Ollama service: '.$exception->getMessage();
++            Log::warning('SupportBot Ollama call failed: '.$exception->getMessage());
++        }
++
++        return null;
++    }
++
+     protected function callOpenAiCompatible(
+         string $baseUrl,
+         string $apiKey,
+diff --git a/Modules/SupportBot/app/Services/SupportInboxNotifier.php b/Modules/SupportBot/app/Services/SupportInboxNotifier.php
+new file mode 100644
+index 000000000..4f8ee5da8
+--- /dev/null
++++ b/Modules/SupportBot/app/Services/SupportInboxNotifier.php
+@@ -0,0 +1,78 @@
++<?php
++
++namespace Modules\SupportBot\Services;
++
++use Modules\Identity\Models\User;
++use Modules\SupportBot\Events\SupportBotMessageBroadcast;
++use Modules\SupportBot\Events\SupportConversationEscalated;
++use Modules\SupportBot\Models\SupportBotConversation;
++use Modules\SupportBot\Notifications\SupportInboxNotification;
++use Modules\SupportBot\Support\SupportBotTenantContext;
++use Modules\Tenancy\Models\Tenant;
++use Ramsey\Uuid\Uuid;
++
++/** Persist once, then broadcast to the same authorized staff as the inbox. */
++class SupportInboxNotifier
++{
++    public function message(SupportBotMessageBroadcast $event): void
++    {
++        if ($event->message->sender_type !== 'visitor' || ! $event->conversation->isWithAgent()) {
++            return;
++        }
++        $this->deliver($event->conversation, 'message:'.$event->message->id, false);
++    }
++
++    public function escalated(SupportConversationEscalated $event): void
++    {
++        $notice = SupportBotTenantContext::run((string) $event->conversation->tenant_id,
++            fn () => $event->conversation->messages()->where('sender_type', 'system')->reorder('id', 'desc')->value('id'));
++        $this->deliver($event->conversation, 'escalation:'.($notice ?? $event->conversation->updated_at?->format('U.u')), true);
++    }
++
++    private function deliver(SupportBotConversation $conversation, string $eventKey, bool $escalation): void
++    {
++        $tenantId = (string) ($conversation->tenant_id ?: 'central');
++        $details = [
++            'category' => 'support_chat',
++            'title' => $escalation ? 'A visitor is waiting for support' : 'New customer support message',
++            // Keep visitor text and contact details inside the permission-gated inbox.
++            'body' => $escalation ? 'Open the support inbox to help this visitor.' : 'A visitor has replied. Open the conversation to read it.',
++            'url' => '/dashboard/support-bot/'.$conversation->bot_id.'/inbox?conversation='.$conversation->id,
++            'bot_id' => $conversation->bot_id,
++            'conversation_id' => $conversation->id,
++            'tenant_id' => $tenantId,
++            'created_at' => now()->toISOString(),
++        ];
++        $send = function () use ($conversation, $tenantId, $eventKey, $details): void {
++            // User, roles and notifications must all use the conversation's database.
++            User::query()->with(['roles.permissions', 'permissions'])->where('is_active', true)->chunkById(100, function ($users) use ($conversation, $tenantId, $eventKey, $details): void {
++                foreach ($users as $user) {
++                    if (! $user->can('view_support_bots') && ! $user->can('manage_support_bots')) {
++                        continue;
++                    }
++                    $id = Uuid::uuid5(Uuid::NAMESPACE_URL, 'hive-support:'.$tenantId.':'.$conversation->id.':'.$eventKey.':'.$user->id)->toString();
++                    $stored = $user->notifications()->firstOrCreate(['id' => $id], [
++                        'type' => SupportInboxNotification::class,
++                        'data' => $details,
++                        'read_at' => null,
++                    ]);
++                    if ($stored->wasRecentlyCreated) {
++                        $notification = new SupportInboxNotification($details);
++                        $notification->id = $id;
++                        // The persisted bell item survives even when WebSockets are unavailable.
++                        rescue(fn () => $user->notifyNow($notification));
++                    }
++                }
++            });
++        };
++        $currentTenant = tenancy()->initialized ? (string) tenant('id') : 'central';
++        if ($currentTenant === $tenantId) {
++            $send();
++        } elseif ($tenantId === 'central') {
++            tenancy()->central($send);
++        } else {
++            // A missing workspace must never fall back to central administrators.
++            Tenant::find($tenantId)?->run($send);
++        }
++    }
++}
+diff --git a/config/services.php b/config/services.php
+index 919c66ca6..4c811261c 100644
+--- a/config/services.php
++++ b/config/services.php
+@@ -63,6 +63,8 @@
+ 
+     'ollama' => [
+         'base_url' => env('OLLAMA_BASE_URL', 'http://localhost:11434/v1'),
++        'num_thread' => env('OLLAMA_NUM_THREAD', 2),
++        'num_ctx' => env('OLLAMA_CONTEXT_LENGTH', 2048),
+         // Comma-separated, exact base URLs that administrators may select.
+         // The primary OLLAMA_BASE_URL is always allowed automatically.
+         'allowed_base_urls' => array_values(array_filter(array_map(

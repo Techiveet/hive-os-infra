@@ -1,0 +1,15 @@
+# Support message notifications
+
+Backend revision: `02d756da45f80c28b6fafe80c3ec10818c887ef3`. Frontend revision: `c2b3c2f2743a495d01becd2edf3dd76ab64cbe63`.
+
+Visitors receive a short sound for a newly received bot or staff reply. The widget includes a mute control and retains its visible unread badge and live transcript. Audio starts only after browser interaction; it never requests browser notification permission. A shared stable-ID guard prevents socket, polling and HTTP delivery from sounding the same message twice. Restored history and old bell entries stay silent. The chime is generated locally with Web Audio and requires no external audio asset.
+
+Active staff authorized to view or manage support bots receive a persisted `support_chat` bell item and synchronous broadcast for each visitor handoff or message in a human-support conversation. Super Admin authorization uses the normal Gate. Bot/agent echoes and routine assistant traffic do not create staff items. Recipient selection and notification storage run in the conversation's actual central or tenant database. A missing tenant never falls back to central. Notification payloads omit visitor message text and contact details. Stable database notification UUIDs prevent duplicate delivery.
+
+Bell items open the matching bot inbox and conversation directly. The global bell owns staff sounds and toasts; the inbox only updates its messages and unread thread badges. Muting is stored locally per staff account or visitor bot. Existing browser notification permissions are not expanded.
+
+The backend patch is cumulative from the pinned published base, retaining the earlier Queen Bee guidance dependencies, module catalog and configuration. A regression run exposed that the preceding website-only image patch omitted already-committed ERP lookup dependencies. This release restores those dependencies rather than changing their source behavior. `backend/runtime-sha256.json` records the expected hashes of the 14 updated runtime files. No database migration or reset is required.
+
+Build the backend context with the revision tag. Build the frontend from a clean source archive of `2c2076769368fab771617aa6198780f30dc3906a`, apply `frontend-source.patch` and the build-only memory patch from `../techive-website-support-20261017/frontend-build.patch`, and use the previous release's public build arguments and constrained Webpack builder. Run the complete TypeScript check independently before skipping it in the constrained image build. Preserve old images and the private pre-release Compose for rollback. Frontend images remain host-built until registry publication is available.
+
+Validation: focused sound gesture/deduplication/burst test passed; targeted ESLint and complete TypeScript checks passed. PHP notification, public widget and handoff regression: 29 tests, 182 assertions passed on PHP 8.5 against a disposable PostgreSQL test database on an internal network, without production mounts. Nine new-control contrast checks passed with zero failures.
