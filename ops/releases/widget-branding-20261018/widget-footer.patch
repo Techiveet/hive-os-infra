@@ -1,0 +1,24 @@
+diff --git a/components/support-bot/support-webchat-widget.tsx b/components/support-bot/support-webchat-widget.tsx
+index 8198449e..ce1349ef 100644
+--- a/components/support-bot/support-webchat-widget.tsx
++++ b/components/support-bot/support-webchat-widget.tsx
+@@ -1484,6 +1484,19 @@ export function SupportWebchatWidget({
+           <Send className="h-4 w-4" aria-hidden="true" />
+         </Button>
+       </form>
++      <footer className="shrink-0 border-t bg-slate-50 px-3 dark:bg-slate-950">
++        <a
++          href="https://hive.techiveet.com"
++          target="_blank"
++          rel="noopener noreferrer"
++          className="flex min-h-11 items-center justify-center gap-1 rounded-md px-2 text-[11px] text-slate-600 transition-colors hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-offset-[-3px] focus-visible:outline-blue-700 dark:text-slate-300 dark:hover:text-slate-100 dark:focus-visible:outline-sky-300"
++        >
++          <span>Powered by</span>
++          <span className="font-semibold underline underline-offset-2">HIVE.OS</span>
++          <span aria-hidden="true">↗</span>
++          <span className="sr-only">(opens in a new tab)</span>
++        </a>
++      </footer>
+     </aside>
+   );
+ }

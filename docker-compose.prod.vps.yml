@@ -980,7 +980,7 @@ services:
 
   # Next.js Frontend
   frontend:
-    image: ghcr.io/techiveet/hive-os-frontend:${HIVE_FRONTEND_TAG:-c2b3c2f2743a495d01becd2edf3dd76ab64cbe63}
+    image: ghcr.io/techiveet/hive-os-frontend:${HIVE_FRONTEND_TAG:-aa3212d1c366c604815e63cdb86d51f3d97a01de}
     pull_policy: if_not_present
     container_name: hive-frontend
     restart: unless-stopped
