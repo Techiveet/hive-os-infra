@@ -514,7 +514,7 @@ services:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
       COPILOT_MODEL: ${COPILOT_MODEL:-qwen2.5:1.5b}
       APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
@@ -638,7 +638,7 @@ services:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
       COPILOT_MODEL: ${COPILOT_MODEL:-qwen2.5:1.5b}
       APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
@@ -726,7 +726,7 @@ services:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
       COPILOT_MODEL: ${COPILOT_MODEL:-qwen2.5:1.5b}
       APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
@@ -806,7 +806,7 @@ services:
       APP_ENV: production
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:1.5b}
-      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
       COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
       COPILOT_MODEL: ${COPILOT_MODEL:-qwen2.5:1.5b}
       APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}

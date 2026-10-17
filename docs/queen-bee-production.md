@@ -7,7 +7,7 @@ Ollama has no published port. It shares the private Hive network and persists mo
 Required saved Coolify runtime settings:
 - OLLAMA_BASE_URL=http://ollama:11434/v1
 - OLLAMA_MODEL=qwen2.5:1.5b
-- OLLAMA_EMBEDDING_MODEL=embeddinggemma
+- OLLAMA_EMBEDDING_MODEL=embeddinggemma:300m-qat-q8_0
 - COPILOT_PROVIDER=ollama
 - COPILOT_MODEL=qwen2.5:1.5b
 
