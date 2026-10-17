@@ -1,0 +1,844 @@
+diff --git a/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php b/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
+index f897a78c5..a8fa0a72b 100644
+--- a/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
++++ b/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
+@@ -7,9 +7,9 @@
+ use Illuminate\Support\Facades\DB;
+ use Illuminate\Support\Facades\Redis;
+ use Illuminate\Support\Facades\Schema;
+-use Illuminate\Support\Str;
+ use Modules\Core\Models\Activity;
+ use Modules\Core\Models\SystemAlert;
++use Modules\Core\Support\ModuleRegistry;
+ use Modules\Identity\Models\Permission;
+ use Modules\Identity\Models\Role;
+ use Modules\Identity\Models\User;
+@@ -431,59 +431,7 @@ private function buildBusinessMetrics(): array
+ 
+     private function buildModuleMetrics($activityRows, bool $isSuperAdmin, ?string $tenantId): array
+     {
+-        $catalog = collect(TenantModuleCatalog::catalogWithPricing())
+-            ->unique('slug')
+-            ->map(fn (array $module): array => array_merge($module, [
+-                'registry_enabled' => false,
+-                'is_subscription_catalog' => true,
+-            ]))
+-            ->keyBy('slug');
+-        $registryAliases = [
+-            'LearningManagement' => 'learning_management',
+-            'MailBox' => 'mailbox',
+-            'B2BMarketplace' => 'b2b_marketplace',
+-            'Inventory' => 'inventory_control',
+-            'Warehouse' => 'warehouse_management',
+-            'Production' => 'production_management',
+-            'Workflow' => 'workflow_automation',
+-            'ProjectManagement' => 'project_management',
+-            'HumanResources' => 'human_resources',
+-            'Attendance' => 'attendance_management',
+-            'Payroll' => 'payroll_management',
+-            'Finance' => 'financial_management',
+-            'PerformanceManagement' => 'performance_management',
+-            'ProcurementManagement' => 'procurement_management',
+-            'SupplyChain' => 'supply_chain_management',
+-            'Sales' => 'sales_management',
+-            'Crm' => 'crm',
+-            'Fleet' => 'fleet_management',
+-            'ServiceManagement' => 'service_management',
+-            'InternalAudit' => 'internal_audit',
+-            'StrategicPlanning' => 'strategic_planning',
+-            'Vantage' => 'vantage_bi',
+-            'Agriculture' => 'agriculture',
+-            'LandingTemplates' => 'premium_landing_templates',
+-            'SupportBot' => 'support_bot',
+-        ];
+-        $registeredModules = json_decode((string) @file_get_contents(base_path('modules_statuses.json')), true);
+-        foreach (is_array($registeredModules) ? $registeredModules : [] as $moduleName => $enabled) {
+-            $slug = $registryAliases[$moduleName] ?? Str::snake($moduleName);
+-            if ($catalog->has($slug)) {
+-                $catalog->put($slug, array_merge($catalog->get($slug), ['registry_enabled' => (bool) $enabled]));
+-
+-                continue;
+-            }
+-
+-            $catalog->put($slug, [
+-                'slug' => $slug,
+-                'name' => Str::headline($moduleName),
+-                'category' => 'Platform',
+-                'monthly_price_etb' => 0,
+-                'registry_enabled' => (bool) $enabled,
+-                'is_subscription_catalog' => false,
+-            ]);
+-        }
+-        $catalog = $catalog->values();
++        $catalog = app(ModuleRegistry::class)->catalog();
+         $entitlementCounts = array_fill_keys($catalog->pluck('slug')->all(), 0);
+ 
+         if ($isSuperAdmin || $tenantId !== null) {
+diff --git a/Modules/Core/app/Support/ModuleRegistry.php b/Modules/Core/app/Support/ModuleRegistry.php
+index 5c224fecd..f29ccac05 100644
+--- a/Modules/Core/app/Support/ModuleRegistry.php
++++ b/Modules/Core/app/Support/ModuleRegistry.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Modules\Core\Support;
+ 
++use Illuminate\Support\Collection;
++use Illuminate\Support\Str;
++use Modules\Subscription\Support\TenantModuleCatalog;
++
+ class ModuleRegistry
+ {
+     public function __construct(
+@@ -13,6 +17,65 @@ public function all(): array
+         return $this->modules ?? config('modular_monolith.modules', []);
+     }
+ 
++    /** The same registered product catalog used by the dashboard and assistant. */
++    public function catalog(): Collection
++    {
++        $catalog = collect(TenantModuleCatalog::catalogWithPricing())
++            ->unique('slug')
++            ->map(fn (array $module): array => array_merge($module, [
++                'registry_enabled' => false,
++                'is_subscription_catalog' => true,
++            ]))
++            ->keyBy('slug');
++        $registryAliases = [
++            'LearningManagement' => 'learning_management',
++            'MailBox' => 'mailbox',
++            'B2BMarketplace' => 'b2b_marketplace',
++            'Inventory' => 'inventory_control',
++            'Warehouse' => 'warehouse_management',
++            'Production' => 'production_management',
++            'Workflow' => 'workflow_automation',
++            'ProjectManagement' => 'project_management',
++            'HumanResources' => 'human_resources',
++            'Attendance' => 'attendance_management',
++            'Payroll' => 'payroll_management',
++            'Finance' => 'financial_management',
++            'PerformanceManagement' => 'performance_management',
++            'ProcurementManagement' => 'procurement_management',
++            'SupplyChain' => 'supply_chain_management',
++            'Sales' => 'sales_management',
++            'Crm' => 'crm',
++            'Fleet' => 'fleet_management',
++            'ServiceManagement' => 'service_management',
++            'InternalAudit' => 'internal_audit',
++            'StrategicPlanning' => 'strategic_planning',
++            'Vantage' => 'vantage_bi',
++            'Agriculture' => 'agriculture',
++            'LandingTemplates' => 'premium_landing_templates',
++            'SupportBot' => 'support_bot',
++        ];
++        $registeredModules = json_decode((string) @file_get_contents(base_path('modules_statuses.json')), true);
++        foreach (is_array($registeredModules) ? $registeredModules : [] as $moduleName => $enabled) {
++            $slug = $registryAliases[$moduleName] ?? Str::snake($moduleName);
++            if ($catalog->has($slug)) {
++                $catalog->put($slug, array_merge($catalog->get($slug), ['registry_enabled' => (bool) $enabled]));
++
++                continue;
++            }
++
++            $catalog->put($slug, [
++                'slug' => $slug,
++                'name' => Str::headline($moduleName),
++                'category' => 'Platform',
++                'monthly_price_etb' => 0,
++                'registry_enabled' => (bool) $enabled,
++                'is_subscription_catalog' => false,
++            ]);
++        }
++
++        return $catalog->values();
++    }
++
+     public function get(string $key): ?array
+     {
+         return $this->all()[$key] ?? null;
+diff --git a/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php b/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
+index 88bea7e26..f32500b90 100644
+--- a/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
++++ b/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
+@@ -410,6 +410,12 @@ private function speaksLanguageOf(SupportBot $bot, string $message): bool
+ 
+     private function worthPhrasing(string $grounded, string $mode, array $payload): bool
+     {
++        // The retrieved purpose is already a short answer to a definition.
++        // Rewriting it from page guides can turn it back into navigation or add facts.
++        if (($payload['answer_kind'] ?? null) === 'module_explanation') {
++            return false;
++        }
++
+         if (mb_strlen($grounded) < self::MIN_LENGTH_TO_PHRASE) {
+             return false;
+         }
+diff --git a/Modules/SupportBot/app/Services/Copilot/CopilotService.php b/Modules/SupportBot/app/Services/Copilot/CopilotService.php
+index 4b5767041..2adc7dde9 100644
+--- a/Modules/SupportBot/app/Services/Copilot/CopilotService.php
++++ b/Modules/SupportBot/app/Services/Copilot/CopilotService.php
+@@ -320,6 +320,16 @@ private function handleGuidance(string $message, CopilotContext $context, array
+         // the same words as the page they belong to, and taking only three
+         // could leave no page document in the set to prefer.
+         $documents = $this->knowledge->search($message, $context, 8);
++        $tool = $route['tool'];
++        $page = $tool !== null ? $this->knowledge->pageForTool($tool, $context) : null;
++        if ($page !== null) {
++            // Ranking may prefer Production for a question about a product.
++            // The resolved action's page is authoritative, and unrelated
++            // modules must not enter the answer's rewriting context.
++            $documents = collect([$page])->concat($documents
++                ->where('module', $page['module'])
++                ->reject(fn (array $document) => $document['doc_key'] === $page['doc_key']))->values();
++        }
+         $this->currentFacts = $documents->all();
+ 
+         if ($documents->isEmpty()) {
+@@ -332,8 +342,6 @@ private function handleGuidance(string $message, CopilotContext $context, array
+             ?? $documents->firstWhere('kind', 'module')
+             ?? $documents->first();
+ 
+-        $tool = $route['tool'];
+-
+         $body = $this->documentBody($primary, $context);
+ 
+         // If the assistant could also just do it, say so — but only when the
+@@ -356,13 +364,26 @@ private function handleGuidance(string $message, CopilotContext $context, array
+     private function handleInformation(string $message, CopilotContext $context): array
+     {
+         if ($this->isModuleOverviewQuestion($message)) {
+-            return $this->describeModules($context);
++            return $this->describeModules($context, $message);
+         }
+ 
+         if ($this->isCapabilityQuestion($message)) {
+             return $this->describeCapabilities($context);
+         }
+ 
++        if (($module = $this->knowledge->moduleExplanation($message, $context)) !== null) {
++            $this->currentFacts = [$module];
++
++            return $this->reply('**'.$module['title']."**\n\n".$module['summary'], 'information', $context, [
++                'answer_kind' => 'module_explanation',
++                'follow_ups' => ['Where can I find '.$module['title'].'?', 'What modules does Hive have?'],
++                'sources' => $this->sources(collect([$module])),
++                'navigation' => $module['href'] ? [[
++                    'label' => 'Open '.$module['title'], 'href' => $module['href'], 'module' => $module['module'],
++                ]] : [],
++            ]);
++        }
++
+         $documents = $this->knowledge->search($message, $context, 4);
+         $this->currentFacts = $documents->all();
+ 
+@@ -1081,42 +1102,15 @@ private function unsupportedAction(string $message, CopilotContext $context): ar
+         return $this->notCovered($message, $context);
+     }
+ 
+-    private function describeModules(CopilotContext $context): array
++    private function describeModules(CopilotContext $context, string $message): array
+     {
+-        $text = "🏢 **HIVE.OS Enterprise Platform Modules**:\n\n"
+-            ."HIVE.OS includes **32 integrated enterprise modules** organized across key operational pillars:\n\n"
+-            ."• **Operations & Commerce**: [Inventory Catalog](/dashboard/inventory/catalog/products), [Warehouse](/dashboard/warehouse), [POS Terminal](/dashboard/pos), [B2B Marketplace](/dashboard/marketplace), [Sales](/dashboard/finance/sales)\n"
+-            ."• **Finance & Tax**: [Accounting & General Ledger](/dashboard/finance/general-ledger), [Invoicing](/dashboard/finance/sales), [Ethiopian Payroll & Tax](/dashboard/payroll), [Treasury](/dashboard/treasury)\n"
+-            ."• **Workforce & HR**: [Employee Directory](/dashboard/hr/employees), [Attendance & Biometrics](/dashboard/attendance), [Leaves](/dashboard/leave), [Recruitment](/dashboard/recruitment)\n"
+-            ."• **Hospitality & Food**: [Waiter POS](/dashboard/hospitality/waiter-pos), [Kitchen Display (KDS)](/dashboard/hospitality/kds), [Room Booking](/dashboard/hospitality/rooms)\n"
+-            ."• **Manufacturing & Fleet**: [Bill of Materials (BOM)](/dashboard/production), [Work Orders](/dashboard/production/orders), [Fleet & Telemetry](/dashboard/fleet)\n"
+-            ."• **Automation & AI**: [AI Support Bot Studio](/dashboard/support-bot), [CRM & Campaigns](/dashboard/crm), [Project Management](/dashboard/projects)\n\n"
+-            .'Ask me about any specific module, or click a quick action below to explore!';
++        $overview = $this->knowledge->moduleOverview($message);
+ 
+-        return $this->reply(
+-            $text,
+-            'information',
+-            $context,
+-            [
+-                'total_modules' => 32,
+-                'action_buttons' => [
+-                    ['label' => 'Explore Products Catalog', 'url' => '/dashboard/inventory/catalog/products'],
+-                    ['label' => 'Open Payroll Hub', 'url' => '/dashboard/payroll'],
+-                    ['label' => 'Open Hospitality KDS', 'url' => '/dashboard/hospitality/kds'],
+-                ],
+-                // Read straight off the live introspection rather than
+-                // retrieved, so there is no relevance score to judge it by and
+-                // nothing to be uncertain about. Saying so keeps a correct
+-                // answer out of the "questions nobody could answer" queue.
+-                'authoritative' => true,
+-                'follow_ups' => [
+-                    'How to Create a Product?',
+-                    'How to Create an Invoice?',
+-                    'Calculate Salary Tax',
+-                    'How do Table Orders Work on Waiter POS?',
+-                ],
+-            ],
+-        );
++        return $this->reply($overview['content'], 'information', $context, [
++            'total_modules' => $overview['total_modules'],
++            'authoritative' => true,
++            'follow_ups' => ['What is the Procurement module?', 'What is the Payroll module?'],
++        ]);
+     }
+ 
+     private function describeCapabilities(CopilotContext $context): array
+@@ -1283,7 +1277,9 @@ private function toolMentionScore(string $message, array $tool): int
+     private function isModuleOverviewQuestion(string $message): bool
+     {
+         $normalised = Str::lower($message);
+-        $hasModule = Str::contains($normalised, ['module', 'modul', 'ሞጁል']);
++        $hasModule = preg_match('/\bmodules\b|ሞጁሎች/u', $normalised) === 1
++            || (preg_match('/\b(?:how many|list|all)\b/u', $normalised) === 1
++                && preg_match('/\bmodul[a-z]*\b/u', $normalised) === 1);
+         $hasQuestion = Str::contains($normalised, ['how many', 'what', 'which', 'list', 'all', 'exist', 'have', 'count', 'show', 'ስንት']);
+ 
+         return $hasModule && $hasQuestion;
+diff --git a/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php b/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
+index 1479de108..b3ee5f807 100644
+--- a/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
++++ b/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
+@@ -4,6 +4,7 @@
+ 
+ use Illuminate\Support\Collection;
+ use Illuminate\Support\Str;
++use Modules\Core\Support\ModuleRegistry;
+ use Modules\SupportBot\Models\CopilotKnowledgeDocument;
+ 
+ /**
+@@ -199,6 +200,80 @@ public function publicSearch(string $query, int $limit = 3): Collection
+             ->values();
+     }
+ 
++    /** A routed task has a known page; a related guide must not displace it. */
++    public function pageForTool(array $tool, CopilotContext $context): ?array
++    {
++        if (empty($tool['target_url'])) {
++            return null;
++        }
++        $document = CopilotKnowledgeDocument::query()
++            ->visibleTo($context->permissions(), $context->isCentral() ? 'central' : 'tenant', $context->enabledModules())
++            ->where('kind', 'submodule')->where('href', $tool['target_url'])->first();
++        if ($document === null) {
++            return null;
++        }
++
++        return [
++            'doc_key' => $document->doc_key, 'kind' => $document->kind,
++            'module' => $document->module, 'submodule' => $document->submodule,
++            'title' => $document->title, 'summary' => $document->summary,
++            'body' => $document->body, 'href' => $document->href, 'score' => 100,
++        ];
++    }
++
++    /** Counts and lists come from the dashboard's catalog, not a hardcoded answer. */
++    public function moduleOverview(string $query): array
++    {
++        $catalog = app(ModuleRegistry::class)->catalog();
++        $count = $catalog->count();
++        $content = "**HIVE.OS Enterprise Platform Modules**\n\nHive has **{$count} registered modules**. "
++            .'Your subscription and permissions determine which ones you can use.';
++        if (! preg_match('/how many|count|ስንት/iu', $query)) {
++            $content .= "\n\n".$catalog->pluck('name')->sort()->map(fn ($name) => '- '.$name)->implode("\n");
++        }
++
++        return ['content' => $content, 'total_modules' => $count];
++    }
++
++    /** A definition needs the named module's purpose, not a high-ranking screen guide. */
++    public function moduleExplanation(string $query, ?CopilotContext $context = null): ?array
++    {
++        $question = Str::lower(trim($query, " \t\n\r\0\x0B?!."));
++        if (! preg_match('/^(?:please\s+)?(?:what (?:is|does)|how does|explain|describe)\s+(?:the\s+)?(.+)$/u', $question, $match)) {
++            return null;
++        }
++        $subject = preg_replace('/\s+(?:briefly|in simple terms)$/u', '', $match[1]);
++        $subject = preg_replace('/\s+(?:module(?:\s+(?:do|work))?|work|do)(?:\s+in\s+hive(?:\.os)?)?$/u', '', $subject);
++        $subject = preg_replace('/\s+module\b.*$/u', '', $subject);
++        $documents = CopilotKnowledgeDocument::query()->where('kind', 'module')->where('doc_key', 'like', 'module:%');
++        if ($context !== null) {
++            $documents->visibleTo($context->permissions(), $context->isCentral() ? 'central' : 'tenant', $context->enabledModules());
++        } else {
++            $documents->whereIn('audience', ['tenant', 'all']);
++        }
++        foreach ($documents->get() as $document) {
++            $names = [$document->title, Str::headline($document->module)];
++            $names[] = preg_replace('/\s+management$/iu', '', $document->title);
++            // Aliases help with an explicitly named module; a screen name alone
++            // (for example invoice matching) must retain its more specific guide.
++            if (preg_match('/\bmodule\b/u', $question)) {
++                $names = array_merge($names, $document->keywords ?? []);
++            }
++            if (! in_array($subject, array_map(fn ($name) => Str::lower(trim($name)), $names), true)) {
++                continue;
++            }
++
++            return [
++                'doc_key' => $document->doc_key, 'kind' => 'module',
++                'module' => $document->module, 'submodule' => null,
++                'title' => $document->title, 'summary' => $document->summary,
++                'body' => $document->body, 'href' => $document->href, 'score' => 100,
++            ];
++        }
++
++        return null;
++    }
++
+     /**
+      * The single best module match for a query, used to answer "how does X
+      * work" and to scope navigation answers.
+diff --git a/Modules/SupportBot/app/Services/SupportBotEngineService.php b/Modules/SupportBot/app/Services/SupportBotEngineService.php
+index d4049717f..8cdc9b0c8 100644
+--- a/Modules/SupportBot/app/Services/SupportBotEngineService.php
++++ b/Modules/SupportBot/app/Services/SupportBotEngineService.php
+@@ -477,17 +477,22 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+             return [$convMsg];
+         }
+ 
+-        // 6. Query RAG Knowledge Base
+-        $ragResult = $this->knowledgeService->searchRelevantArticles($bot, $userText);
++        // Definitions use the named module's purpose before ranking screen guides or FAQs.
++        if (($module = $this->platformKnowledge->moduleExplanation($userText)) !== null) {
++            return [SupportBotMessage::create([
++                'conversation_id' => $conversation->id,
++                'sender_type' => 'bot', 'sender_name' => $bot->name ?? 'HIVE.OS Copilot',
++                'content' => '**'.$module['title']."**\n\n".$module['summary'],
++                'payload' => [
++                    'answer_kind' => 'module_explanation', 'source_kb' => $module['title'],
++                    'action_buttons' => $module['href'] ? [['label' => 'Open '.$module['title'], 'url' => $module['href']]] : [],
++                    'quick_replies' => ['Talk to a person', 'What modules does Hive have?'],
++                ],
++            ])];
++        }
+ 
+-        // 6b. And the platform's own generated documentation.
+-        //
+-        // Retrieved *before* the model is asked, not merely as a fallback after
+-        // it fails. Left to answer unaided, a small local model produces a
+-        // fluent description of a Procurement module it has imagined — the
+-        // shape of the answer is right and the content is invented. Handing it
+-        // the real document first makes the model a writer rather than a
+-        // source, which is the same inversion the in-app Copilot relies on.
++        // 6. Retrieve facts before asking the model to write an answer.
++        $ragResult = $this->knowledgeService->searchRelevantArticles($bot, $userText);
+         $platform = $this->answerFromPlatformKnowledge($userText);
+ 
+         // 7. Query LLM if a provider is configured — and if there is something
+@@ -508,7 +513,10 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+             $context = is_array($ragResult) ? $ragResult : [];
+ 
+             if ($platform !== null) {
+-                array_unshift($context, [
++                // A matched platform guide is authoritative for ERP questions.
++                // Loose FAQ hits often contain unrelated legacy instructions;
++                // mixing them in overwhelms a small local model's context.
++                $context = [[
+                     'title' => $platform['title'],
+                     // Trimmed to the conversational part of the document —
+                     // purpose and navigation — not the exhaustive endpoint,
+@@ -518,7 +526,7 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+                     // out. The full, untrimmed document is still what gets
+                     // shown verbatim if the LLM step is skipped entirely.
+                     'content' => Str::limit($platform['content'], 1400, ''),
+-                ]);
++                ]];
+             }
+ 
+             $llmResponseText = $this->llmService->generateResponse(
+@@ -991,7 +999,7 @@ protected function matchModulesOverviewIntent(string $lower): ?array
+         // explicit overview request should return the general module directory.
+         $hasModuleKeyword = preg_match('/\bmodules\b|ሞጁሎች/u', $lower) === 1
+             || (preg_match('/\b(?:how many|list|all)\b/u', $lower) === 1
+-                && str_contains($lower, 'module'));
++                && preg_match('/\bmodul[a-z]*\b/u', $lower) === 1);
+         $hasCountOrList = str_contains($lower, 'how many') ||
+                           str_contains($lower, 'what') ||
+                           str_contains($lower, 'which') ||
+@@ -1004,29 +1012,11 @@ protected function matchModulesOverviewIntent(string $lower): ?array
+                           str_contains($lower, 'ሞጁል');
+ 
+         if ($hasModuleKeyword && $hasCountOrList) {
+-            $text = "🏢 **HIVE.OS Enterprise Platform Modules**:\n\n".
+-                "HIVE.OS includes **32 integrated enterprise modules** organized across key operational pillars:\n\n".
+-                "• **Operations & Commerce**: [Inventory Catalog](/dashboard/inventory/catalog/products), [Warehouse](/dashboard/warehouse), [POS Terminal](/dashboard/pos), [B2B Marketplace](/dashboard/marketplace), [Sales](/dashboard/finance/sales)\n".
+-                "• **Finance & Tax**: [Accounting & General Ledger](/dashboard/finance/general-ledger), [Invoicing](/dashboard/finance/sales), [Ethiopian Payroll & Tax](/dashboard/payroll), [Treasury](/dashboard/treasury)\n".
+-                "• **Workforce & HR**: [Employee Directory](/dashboard/hr/employees), [Attendance & Biometrics](/dashboard/attendance), [Leaves](/dashboard/leave), [Recruitment](/dashboard/recruitment)\n".
+-                "• **Hospitality & Food**: [Waiter POS](/dashboard/hospitality/waiter-pos), [Kitchen Display (KDS)](/dashboard/hospitality/kds), [Room Booking](/dashboard/hospitality/rooms)\n".
+-                "• **Manufacturing & Fleet**: [Bill of Materials (BOM)](/dashboard/production), [Work Orders](/dashboard/production/orders), [Fleet & Telemetry](/dashboard/fleet)\n".
+-                "• **Automation & AI**: [AI Support Bot Studio](/dashboard/support-bot), [CRM & Campaigns](/dashboard/crm), [Project Management](/dashboard/projects)\n\n".
+-                'Ask me about any specific module, or click a quick action below to explore!';
++            $overview = $this->platformKnowledge->moduleOverview($lower);
+ 
+             return [
+-                'content' => $text,
+-                'action_buttons' => [
+-                    ['label' => 'Explore Products Catalog', 'url' => '/dashboard/inventory/catalog/products'],
+-                    ['label' => 'Open Payroll Hub', 'url' => '/dashboard/payroll'],
+-                    ['label' => 'Open Hospitality KDS', 'url' => '/dashboard/hospitality/kds'],
+-                ],
+-                'quick_replies' => [
+-                    'How to Create a Product?',
+-                    'How to Create an Invoice?',
+-                    'Calculate Salary Tax',
+-                    'How do Table Orders Work on Waiter POS?',
+-                ],
++                'content' => $overview['content'],
++                'quick_replies' => ['What is the Procurement module?', 'What is the Payroll module?', 'Talk to a person'],
+             ];
+         }
+ 
+diff --git a/Modules/SupportBot/app/Services/SupportBotLlmService.php b/Modules/SupportBot/app/Services/SupportBotLlmService.php
+index 5d8815a3e..11b981347 100644
+--- a/Modules/SupportBot/app/Services/SupportBotLlmService.php
++++ b/Modules/SupportBot/app/Services/SupportBotLlmService.php
+@@ -84,6 +84,7 @@ public function lastError(): ?string
+ 1. Only answer questions about HIVE.OS, its modules, and Ethiopian business operations.
+ 2. Never invent module names, routes, or figures.
+ 3. Keep answers concise, helpful, and formatted with clean Markdown.
++   Use at most two short sentences and the most relevant exact page path unless the user asks for steps or a list.
+ 4. Never repeat words or phrases in loops.
+ 5. Write in the language named at the top of these instructions, and in no other. HIVE.OS supports English and Amharic only.
+ EOT;
+@@ -600,7 +601,7 @@ private function dispatch(
+         return $this->guard(match ($provider) {
+             'gemini' => $this->callGemini($apiKey, $model ?: self::DEFAULT_MODELS['gemini'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'groq' => $this->callOpenAiCompatible('https://api.groq.com/openai/v1', $apiKey, $model ?: self::DEFAULT_MODELS['groq'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+-            'ollama' => $this->callOpenAiCompatible($baseUrl, $apiKey ?: 'ollama-local', $model ?: self::DEFAULT_MODELS['ollama'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout, disableThinking: str_starts_with(strtolower($model ?? ''), 'qwen3')),
++            'ollama' => $this->callOllama($baseUrl, $apiKey, $model ?: self::DEFAULT_MODELS['ollama'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'openrouter' => $this->callOpenAiCompatible('https://openrouter.ai/api/v1', $apiKey, $model ?: self::DEFAULT_MODELS['openrouter'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'anthropic' => $this->callAnthropic($apiKey, $model ?: self::DEFAULT_MODELS['anthropic'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             default => $this->callOpenAiCompatible('https://api.openai.com/v1', $apiKey, $model ?: self::DEFAULT_MODELS['openai'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+@@ -796,6 +797,63 @@ protected function callGemini(
+         return null;
+     }
+ 
++    /** Native options keep CPU inference within the deployment's allocation. */
++    protected function callOllama(
++        string $baseUrl,
++        ?string $apiKey,
++        string $model,
++        string $systemPrompt,
++        array $history,
++        string $userMessage,
++        float $temperature,
++        int $maxTokens,
++        int $timeout,
++    ): ?string {
++        $messages = [['role' => 'system', 'content' => $systemPrompt]];
++        foreach ($history as $message) {
++            $messages[] = [
++                'role' => ($message['sender_type'] ?? 'visitor') === 'visitor' ? 'user' : 'assistant',
++                'content' => (string) ($message['content'] ?? ''),
++            ];
++        }
++        $messages[] = ['role' => 'user', 'content' => $userMessage];
++        $endpoint = preg_replace('~/v1$~', '', rtrim($baseUrl, '/')).'/api/chat';
++
++        try {
++            $request = Http::timeout($timeout)->connectTimeout(5)
++                ->retry(2, 300, self::retryUnlessTimedOut(...), throw: false);
++            if ($apiKey) {
++                $request = $request->withToken($apiKey);
++            }
++            $response = $request->post($endpoint, [
++                'model' => $model,
++                'messages' => $messages,
++                'stream' => false,
++                ...(str_starts_with(strtolower($model), 'qwen3') ? ['think' => false] : []),
++                'options' => [
++                    'temperature' => $temperature,
++                    'num_predict' => $maxTokens,
++                    'num_thread' => max(1, min(16, (int) config('services.ollama.num_thread', 2))),
++                    'num_ctx' => max(512, min(32768, (int) config('services.ollama.num_ctx', 2048))),
++                ],
++            ]);
++            if ($response->successful()) {
++                $text = $response->json('message.content');
++                if (is_string($text) && trim($text) !== '') {
++                    return $text;
++                }
++                $this->lastError = 'Ollama returned no completion text.';
++            } else {
++                $this->lastError = $this->describeHttpError($response->json(), $response->status());
++            }
++        } catch (\Throwable $exception) {
++            $this->lastError = 'Could not reach the configured Ollama service: '.$exception->getMessage();
++            Log::warning('SupportBot Ollama call failed: '.$exception->getMessage());
++        }
++
++        return null;
++    }
++
+     protected function callOpenAiCompatible(
+         string $baseUrl,
+         string $apiKey,
+diff --git a/Modules/SupportBot/tests/Feature/CopilotPhrasingTest.php b/Modules/SupportBot/tests/Feature/CopilotPhrasingTest.php
+index 88f6d2142..7eb97f7ca 100644
+--- a/Modules/SupportBot/tests/Feature/CopilotPhrasingTest.php
++++ b/Modules/SupportBot/tests/Feature/CopilotPhrasingTest.php
+@@ -71,7 +71,7 @@ public function test_a_measured_language_failure_skips_generation_but_keeps_supp
+             'languages' => json_encode(['en' => true, 'am' => false]),
+         ]);
+         Cache::forget('copilot:model-languages:all:ollama');
+-        Http::fake(['*' => Http::response(['choices' => [['message' => ['content' => 'Open Products.']]]])]);
++        Http::fake(['*' => Http::response(['message' => ['content' => 'Open Products.']])]);
+         $llm = app(SupportBotLlmService::class);
+         $this->assertNull($llm->complete($this->bot, 'Use supplied facts.', 'ምርት እንዴት እፈጥራለሁ?'));
+         $this->assertNull($llm->generateResponse($this->bot, 'ምርት እንዴት እፈጥራለሁ?'));
+@@ -83,13 +83,18 @@ public function test_a_measured_language_failure_skips_generation_but_keeps_supp
+ 
+     public function test_qwen_rewriting_disables_thinking_without_changing_cloud_requests(): void
+     {
+-        config(['services.ollama.base_url' => 'http://ollama:11434/v1']);
+-        Http::fake(['*' => Http::response(['choices' => [['message' => ['content' => 'Open Products.']]]])]);
++        config(['services.ollama.base_url' => 'http://ollama:11434/v1', 'services.ollama.num_thread' => 2]);
++        Http::fake([
++            'http://ollama:11434/api/chat' => Http::response(['message' => ['content' => 'Open Products.']]),
++            'https://api.openai.com/v1/chat/completions' => Http::response(['choices' => [['message' => ['content' => 'Open Products.']]]]),
++        ]);
+         $this->bot->update(['llm_provider' => 'ollama', 'model' => 'qwen3.5:0.8b-q8_0', 'llm_api_key' => null]);
+         $llm = app(SupportBotLlmService::class);
+         $this->assertSame('Open Products.', $llm->complete($this->bot, 'Use supplied facts.', 'How do I create a product?'));
+-        Http::assertSent(fn ($request) => $request->url() === 'http://ollama:11434/v1/chat/completions'
+-            && $request['reasoning_effort'] === 'none');
++        Http::assertSent(fn ($request) => $request->url() === 'http://ollama:11434/api/chat'
++            && $request['think'] === false && $request['stream'] === false
++            && $request['options']['num_thread'] === 2 && $request['options']['num_ctx'] === 2048
++            && $request['options']['num_predict'] === 1200);
+         $this->bot->update(['llm_provider' => 'openai', 'model' => 'gpt-4o-mini', 'llm_api_key' => 'test-key']);
+         $this->assertSame('Open Products.', $llm->complete($this->bot, 'Use supplied facts.', 'How do I create a product?'));
+         Http::assertSent(fn ($request) => $request->url() === 'https://api.openai.com/v1/chat/completions'
+@@ -97,6 +102,29 @@ public function test_qwen_rewriting_disables_thinking_without_changing_cloud_req
+         Http::assertSentCount(2);
+     }
+ 
++    public function test_native_ollama_errors_keep_the_grounded_fallback_available(): void
++    {
++        config(['services.ollama.base_url' => 'http://ollama:11434/v1']);
++        $this->bot->update(['llm_provider' => 'ollama', 'model' => 'test-native', 'llm_api_key' => null]);
++        Http::fake(['http://ollama:11434/api/chat' => Http::response(['error' => 'model unavailable'], 503)]);
++        $llm = app(SupportBotLlmService::class);
++        $this->assertNull($llm->complete($this->bot, 'Use supplied facts.', 'How do I create a product?'));
++        $this->assertNotEmpty($llm->lastError());
++        Http::assertSentCount(1);
++    }
++
++    public function test_a_concise_module_definition_is_not_rewritten_into_a_different_answer(): void
++    {
++        Http::preventStrayRequests();
++        $definition = 'Procurement controls purchasing from supplier competition through receiving and invoice matching.';
++        $this->assertSame($definition, app(CopilotAnswerSynthesizer::class)->phrase(
++            $definition, 'What is the Procurement module?', 'information',
++            CopilotContext::fromRequest(Request::create('/api/v1/copilot/chat')),
++            ['answer_kind' => 'module_explanation'],
++        ));
++        Http::assertNothingSent();
++    }
++
+     public function test_a_faithful_rewrite_is_used(): void
+     {
+         $rewrite = "Products are what you buy and sell.\n\n"
+diff --git a/Modules/SupportBot/tests/Feature/CopilotWorkflowTest.php b/Modules/SupportBot/tests/Feature/CopilotWorkflowTest.php
+index 5b5a835a7..cfdd32685 100644
+--- a/Modules/SupportBot/tests/Feature/CopilotWorkflowTest.php
++++ b/Modules/SupportBot/tests/Feature/CopilotWorkflowTest.php
+@@ -5,8 +5,10 @@
+ use Illuminate\Foundation\Testing\RefreshDatabase;
+ use Illuminate\Support\Facades\Http;
+ use Modules\Core\Models\Setting;
++use Modules\Core\Support\ModuleRegistry;
+ use Modules\Identity\Models\User;
+ use Modules\SupportBot\Models\CopilotActionAudit;
++use Modules\SupportBot\Models\CopilotKnowledgeDocument;
+ use Modules\SupportBot\Models\CopilotPendingAction;
+ use Modules\SupportBot\Services\Copilot\ErpKnowledgeCompiler;
+ use Spatie\Permission\Models\Permission;
+@@ -48,9 +50,60 @@ public function test_it_explains_a_module_using_generated_documentation(): void
+             ->assertOk();
+ 
+         $this->assertSame('information', $response->json('mode'));
++        $this->assertSame('module_explanation', $response->json('payload.answer_kind'));
++        $this->assertStringNotContainsString('How to use it', $response->json('content'));
+         $this->assertNotEmpty($response->json('payload.sources'));
+     }
+ 
++    public function test_a_named_module_question_uses_its_guide_instead_of_the_module_directory(): void
++    {
++        $user = $this->userWith(['view_procurement', 'manage_procurement']);
++        $response = $this->actingAsUser($user)
++            ->postJson('/api/v1/copilot/chat', ['message' => 'What is the Procurement module?'])
++            ->assertOk();
++
++        $this->assertStringNotContainsString('Enterprise Platform Modules', $response->json('content'));
++        $this->assertStringContainsString('Source-to-pay control', $response->json('content'));
++        $this->assertStringContainsString('supplier competition', $response->json('content'));
++        $this->assertStringNotContainsString('Where it is', $response->json('content'));
++        $this->assertStringNotContainsString('How to use it', $response->json('content'));
++        $this->assertSame('module', $response->json('payload.sources.0.kind'));
++        $this->assertSame('/dashboard/procurement', $response->json('payload.navigation.0.href'));
++    }
++
++    public function test_definition_paraphrases_answer_the_purpose_without_turning_into_navigation(): void
++    {
++        $user = $this->userWith(['view_procurement', 'manage_procurement']);
++        foreach (['What does procurement do?', 'Explain procurement', 'Describe the Procurement module briefly.', 'What is the Procurement module, in simple terms?', 'What is the Procurement module?h'] as $question) {
++            $response = $this->actingAsUser($user)->postJson('/api/v1/copilot/chat', ['message' => $question])->assertOk();
++            $this->assertSame('module_explanation', $response->json('payload.answer_kind'), $question);
++            $this->assertStringContainsString('Source-to-pay control', $response->json('content'), $question);
++            $this->assertStringNotContainsString('How to use it', $response->json('content'), $question);
++        }
++    }
++
++    public function test_an_explicit_module_overview_still_returns_the_directory(): void
++    {
++        $user = $this->userWith(['view_procurement']);
++        $response = $this->actingAsUser($user)
++            ->postJson('/api/v1/copilot/chat', ['message' => 'What modules does Hive have?'])
++            ->assertOk();
++
++        $this->assertStringContainsString('Enterprise Platform Modules', $response->json('content'));
++    }
++
++    public function test_a_misspelled_module_count_question_answers_with_the_dashboard_catalog_count(): void
++    {
++        $user = $this->userWith(['view_procurement']);
++        $count = app(ModuleRegistry::class)->catalog()->count();
++        $response = $this->actingAsUser($user)
++            ->postJson('/api/v1/copilot/chat', ['message' => 'how many modulke do u have'])
++            ->assertOk();
++        $this->assertSame($count, $response->json('payload.total_modules'));
++        $this->assertStringContainsString("{$count} registered modules", $response->json('content'));
++        $this->assertStringNotContainsString('operations', $response->json('content'));
++    }
++
+     public function test_it_answers_where_a_page_lives_with_a_real_route(): void
+     {
+         $user = $this->userWith(['view_attendance', 'manage_attendance']);
+@@ -106,6 +159,28 @@ public function test_a_typo_still_finds_the_page(): void
+         $this->assertStringContainsString('/dashboard/inventory/catalog/products', $content);
+     }
+ 
++    public function test_product_guidance_uses_the_action_page_even_when_a_competing_guide_ranks_first(): void
++    {
++        $user = $this->userWith(['view_inventory', 'manage_inventory', 'view_production', 'manage_production']);
++        // Semantic retrieval and feedback can put another plausible page first.
++        // A known action still has a specific destination, even for an admin
++        // who may read both Inventory and Production.
++        CopilotKnowledgeDocument::query()
++            ->where('kind', 'submodule')->where('href', '/dashboard/production/lines')
++            ->update(['title' => 'how to create a product', 'summary' => 'how to create a product']);
++
++        $response = $this->actingAsUser($user)
++            ->postJson('/api/v1/copilot/chat', ['message' => 'how to create a product'])
++            ->assertOk();
++
++        $this->assertSame('guidance', $response->json('mode'));
++        $this->assertSame('product.create', $response->json('payload.suggested_tool'));
++        $this->assertSame('/dashboard/inventory/catalog/products', $response->json('payload.navigation.0.href'));
++        $this->assertStringNotContainsString('/dashboard/production/lines', $response->json('content'));
++        $this->assertSame(0, CopilotPendingAction::query()->count());
++        $this->assertDatabaseCount('copilot_action_audits', 0);
++    }
++
+     public function test_a_page_the_user_cannot_reach_is_named_rather_than_denied_existence(): void
+     {
+         // Nothing to do with Inventory.
+diff --git a/Modules/SupportBot/tests/Feature/PublicSupportWidgetTest.php b/Modules/SupportBot/tests/Feature/PublicSupportWidgetTest.php
+index f8ee63013..a9a49352b 100644
+--- a/Modules/SupportBot/tests/Feature/PublicSupportWidgetTest.php
++++ b/Modules/SupportBot/tests/Feature/PublicSupportWidgetTest.php
+@@ -3,10 +3,13 @@
+ namespace Modules\SupportBot\Tests\Feature;
+ 
+ use Illuminate\Foundation\Testing\RefreshDatabase;
++use Illuminate\Support\Facades\Http;
++use Modules\Core\Support\ModuleRegistry;
+ use Modules\SupportBot\Models\SupportBot;
+ use Modules\SupportBot\Models\SupportBotConversation;
+ use Modules\SupportBot\Models\SupportBotKnowledgeBase;
+ use Modules\SupportBot\Models\SupportBotMessage;
++use Modules\SupportBot\Services\Copilot\ErpKnowledgeCompiler;
+ use Modules\SupportBot\Services\Copilot\ErpKnowledgeIndex;
+ use Modules\SupportBot\Services\SupportBotKnowledgeService;
+ use Tests\TestCase;
+@@ -54,6 +57,7 @@ public function test_a_named_module_question_uses_grounding_and_hides_technical_
+         config(['services.gemini.api_key' => null]);
+         $this->bot->update(['llm_provider' => 'gemini', 'llm_api_key' => null]);
+         $this->mock(ErpKnowledgeIndex::class, function ($mock): void {
++            $mock->shouldReceive('moduleExplanation')->andReturn(null);
+             $mock->shouldReceive('publicSearch')->with('What is the Procurement module?', 3)
+                 ->andReturn(collect([[
+                     'title' => 'Procurement Management',
+@@ -90,6 +94,62 @@ public function test_an_explicit_module_overview_remains_available(): void
+         $this->assertStringContainsString('Enterprise Platform Modules', $response->json('data.messages.0.content'));
+     }
+ 
++    public function test_public_module_counts_use_the_live_catalog_even_with_a_typo(): void
++    {
++        $count = app(ModuleRegistry::class)->catalog()->count();
++        $session = $this->startPublicSession();
++        $response = $this->postJson("/api/v1/public/support-bot/{$this->bot->slug}/chat", [
++            'session_id' => $session['session_id'], 'session_token' => $session['session_token'],
++            'message' => 'how many modulke do u have',
++        ])->assertOk();
++        $this->assertStringContainsString("{$count} registered modules", $response->json('data.messages.0.content'));
++        $this->assertStringNotContainsString('operations', $response->json('data.messages.0.content'));
++    }
++
++    public function test_a_matching_platform_guide_does_not_send_unrelated_faqs_to_the_model(): void
++    {
++        $this->bot->update(['llm_provider' => 'gemini', 'llm_api_key' => 'test-key']);
++        $this->mock(SupportBotKnowledgeService::class, function ($mock): void {
++            $mock->shouldReceive('searchRelevantArticles')->andReturn([
++                ['title' => 'Legacy FAQ', 'answer' => str_repeat('IRRELEVANT_OLD_CONTEXT ', 500)],
++            ]);
++        });
++        $this->mock(ErpKnowledgeIndex::class, function ($mock): void {
++            $mock->shouldReceive('moduleExplanation')->andReturn(null);
++            $mock->shouldReceive('publicSearch')->andReturn(collect([[
++                'title' => 'Procurement Management', 'href' => '/dashboard/procurement',
++                'body' => 'Actual verified procurement guide: requisitions and purchase orders.',
++            ]]));
++        });
++        Http::fake(['*' => Http::response([
++            'candidates' => [['content' => ['parts' => [['text' => 'Procurement manages requisitions and purchase orders.']]]]],
++        ])]);
++        $session = $this->startPublicSession();
++        $this->postJson("/api/v1/public/support-bot/{$this->bot->slug}/chat", [
++            'session_id' => $session['session_id'], 'session_token' => $session['session_token'],
++            'message' => 'What is the Procurement module?',
++        ])->assertOk()->assertJsonPath('data.messages.0.content', 'Procurement manages requisitions and purchase orders.');
++        Http::assertSent(fn ($request) => str_contains($request->body(), 'Actual verified procurement guide')
++            && ! str_contains($request->body(), 'IRRELEVANT_OLD_CONTEXT'));
++    }
++
++    public function test_public_module_definitions_explain_the_purpose_instead_of_where_to_click(): void
++    {
++        app(ErpKnowledgeCompiler::class)->compile();
++        Http::preventStrayRequests();
++        $session = $this->startPublicSession();
++        foreach (['What is the Procurement module?', 'What does procurement do?', 'Explain procurement'] as $question) {
++            $response = $this->postJson("/api/v1/public/support-bot/{$this->bot->slug}/chat", [
++                'session_id' => $session['session_id'], 'session_token' => $session['session_token'], 'message' => $question,
++            ])->assertOk();
++            $this->assertStringContainsString('Source-to-pay control', $response->json('data.messages.0.content'));
++            $this->assertStringContainsString('supplier competition', $response->json('data.messages.0.content'));
++            $this->assertStringNotContainsString('How to use it', $response->json('data.messages.0.content'));
++            $this->assertSame('module_explanation', $response->json('data.messages.0.payload.answer_kind'));
++        }
++        Http::assertNothingSent();
++    }
++
+     public function test_config_is_available_without_authentication(): void
+     {
+         $this->getJson("/api/v1/public/support-bot/{$this->bot->slug}/config")
+diff --git a/config/services.php b/config/services.php
+index 919c66ca6..4c811261c 100644
+--- a/config/services.php
++++ b/config/services.php
+@@ -63,6 +63,8 @@
+ 
+     'ollama' => [
+         'base_url' => env('OLLAMA_BASE_URL', 'http://localhost:11434/v1'),
++        'num_thread' => env('OLLAMA_NUM_THREAD', 2),
++        'num_ctx' => env('OLLAMA_CONTEXT_LENGTH', 2048),
+         // Comma-separated, exact base URLs that administrators may select.
+         // The primary OLLAMA_BASE_URL is always allowed automatically.
+         'allowed_base_urls' => array_values(array_filter(array_map(

@@ -494,9 +494,9 @@ services:
 
   # Laravel Backend
   backend:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-e4c04df78cf5a5ad4456bc2d4fb6f01970eba174}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-5b5fcfba1cdfa96b3fe542bd1b6f2dcd5f0f0952}
     build:
-      context: ./ops/releases/queen-bee-e4c04df78
+      context: ./ops/releases/queen-bee-guidance-final-20261017
     pull_policy: build
     container_name: hive-backend
     restart: unless-stopped
@@ -625,9 +625,9 @@ services:
 
   # Queue Worker / Horizon
   queue:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-e4c04df78cf5a5ad4456bc2d4fb6f01970eba174}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-5b5fcfba1cdfa96b3fe542bd1b6f2dcd5f0f0952}
     build:
-      context: ./ops/releases/queen-bee-e4c04df78
+      context: ./ops/releases/queen-bee-guidance-final-20261017
     pull_policy: build
     container_name: hive-queue
     restart: unless-stopped
@@ -720,9 +720,9 @@ services:
   # Laravel scheduler (backups, trash purge, integrations sync, ...). The
   # legacy stack ran this as hive-scheduler; it was lost in the Coolify move.
   scheduler:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-e4c04df78cf5a5ad4456bc2d4fb6f01970eba174}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-5b5fcfba1cdfa96b3fe542bd1b6f2dcd5f0f0952}
     build:
-      context: ./ops/releases/queen-bee-e4c04df78
+      context: ./ops/releases/queen-bee-guidance-final-20261017
     pull_policy: build
     container_name: hive-scheduler
     restart: unless-stopped
@@ -807,9 +807,9 @@ services:
 
   # WebSocket Engine
   reverb:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-e4c04df78cf5a5ad4456bc2d4fb6f01970eba174}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-5b5fcfba1cdfa96b3fe542bd1b6f2dcd5f0f0952}
     build:
-      context: ./ops/releases/queen-bee-e4c04df78
+      context: ./ops/releases/queen-bee-guidance-final-20261017
     pull_policy: build
     container_name: hive-reverb
     restart: unless-stopped

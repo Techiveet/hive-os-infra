@@ -1,5 +1,7 @@
 # Queen Bee production verification — 17 October 2026
 
+**Answer relevance correction:** the initial staff definition check below verified a guide and working route, but did not verify that the reply explained the module's purpose. That was insufficient. The follow-up correction and stronger evidence are recorded in [the answer relevance report](queen-bee-answer-relevance-20261017.md).
+
 The tested central and Aqua Uno flows are deployed: public bot replies using Ollama and retrieved Hive documentation, authenticated staff chat, human handoff, agent replies, saved history, return to AI, answer feedback, and audit filtering. This report records functional checks, not a claim that a small model answers every possible question correctly.
 
 ## Release
