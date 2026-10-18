@@ -1,0 +1,2934 @@
+diff --git a/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php b/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
+index f897a78c5..a8fa0a72b 100644
+--- a/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
++++ b/Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php
+@@ -7,9 +7,9 @@
+ use Illuminate\Support\Facades\DB;
+ use Illuminate\Support\Facades\Redis;
+ use Illuminate\Support\Facades\Schema;
+-use Illuminate\Support\Str;
+ use Modules\Core\Models\Activity;
+ use Modules\Core\Models\SystemAlert;
++use Modules\Core\Support\ModuleRegistry;
+ use Modules\Identity\Models\Permission;
+ use Modules\Identity\Models\Role;
+ use Modules\Identity\Models\User;
+@@ -431,59 +431,7 @@ private function buildBusinessMetrics(): array
+ 
+     private function buildModuleMetrics($activityRows, bool $isSuperAdmin, ?string $tenantId): array
+     {
+-        $catalog = collect(TenantModuleCatalog::catalogWithPricing())
+-            ->unique('slug')
+-            ->map(fn (array $module): array => array_merge($module, [
+-                'registry_enabled' => false,
+-                'is_subscription_catalog' => true,
+-            ]))
+-            ->keyBy('slug');
+-        $registryAliases = [
+-            'LearningManagement' => 'learning_management',
+-            'MailBox' => 'mailbox',
+-            'B2BMarketplace' => 'b2b_marketplace',
+-            'Inventory' => 'inventory_control',
+-            'Warehouse' => 'warehouse_management',
+-            'Production' => 'production_management',
+-            'Workflow' => 'workflow_automation',
+-            'ProjectManagement' => 'project_management',
+-            'HumanResources' => 'human_resources',
+-            'Attendance' => 'attendance_management',
+-            'Payroll' => 'payroll_management',
+-            'Finance' => 'financial_management',
+-            'PerformanceManagement' => 'performance_management',
+-            'ProcurementManagement' => 'procurement_management',
+-            'SupplyChain' => 'supply_chain_management',
+-            'Sales' => 'sales_management',
+-            'Crm' => 'crm',
+-            'Fleet' => 'fleet_management',
+-            'ServiceManagement' => 'service_management',
+-            'InternalAudit' => 'internal_audit',
+-            'StrategicPlanning' => 'strategic_planning',
+-            'Vantage' => 'vantage_bi',
+-            'Agriculture' => 'agriculture',
+-            'LandingTemplates' => 'premium_landing_templates',
+-            'SupportBot' => 'support_bot',
+-        ];
+-        $registeredModules = json_decode((string) @file_get_contents(base_path('modules_statuses.json')), true);
+-        foreach (is_array($registeredModules) ? $registeredModules : [] as $moduleName => $enabled) {
+-            $slug = $registryAliases[$moduleName] ?? Str::snake($moduleName);
+-            if ($catalog->has($slug)) {
+-                $catalog->put($slug, array_merge($catalog->get($slug), ['registry_enabled' => (bool) $enabled]));
+-
+-                continue;
+-            }
+-
+-            $catalog->put($slug, [
+-                'slug' => $slug,
+-                'name' => Str::headline($moduleName),
+-                'category' => 'Platform',
+-                'monthly_price_etb' => 0,
+-                'registry_enabled' => (bool) $enabled,
+-                'is_subscription_catalog' => false,
+-            ]);
+-        }
+-        $catalog = $catalog->values();
++        $catalog = app(ModuleRegistry::class)->catalog();
+         $entitlementCounts = array_fill_keys($catalog->pluck('slug')->all(), 0);
+ 
+         if ($isSuperAdmin || $tenantId !== null) {
+diff --git a/Modules/Core/app/Http/Controllers/Settings/StorageSettingsController.php b/Modules/Core/app/Http/Controllers/Settings/StorageSettingsController.php
+index a0ae53258..989a715c8 100644
+--- a/Modules/Core/app/Http/Controllers/Settings/StorageSettingsController.php
++++ b/Modules/Core/app/Http/Controllers/Settings/StorageSettingsController.php
+@@ -158,15 +158,21 @@ private function tenantSettings(): array
+             'used_bytes' => $tenantUsedBytes,
+             'remaining_bytes' => max(0, ($planQuotaMb * TenantStorageQuota::BYTES_PER_MB) - $tenantUsedBytes),
+             'primary_provider' => $this->providers->primaryProvider(),
+-            'users' => $users->map(fn (User $user): array => [
+-                'id' => (int) $user->getKey(),
+-                'name' => (string) $user->name,
+-                'email' => (string) $user->email,
+-                'is_active' => (bool) $user->is_active,
+-                'storage_quota_mb' => $user->storage_quota_mb === null ? null : (int) $user->storage_quota_mb,
+-                'effective_quota_mb' => $this->quota->userQuotaMb($user),
+-                'used_bytes' => (int) ($usedByUser[$user->getKey()] ?? 0),
+-            ])->values(),
++            'users' => $users->map(function (User $user) use ($usedByUser): array {
++                $rawQuota = array_key_exists('storage_quota_mb', $user->getAttributes())
++                    ? $user->getAttributes()['storage_quota_mb']
++                    : null;
++
++                return [
++                    'id' => (int) $user->getKey(),
++                    'name' => (string) $user->name,
++                    'email' => (string) $user->email,
++                    'is_active' => (bool) $user->is_active,
++                    'storage_quota_mb' => $rawQuota === null ? null : (int) $rawQuota,
++                    'effective_quota_mb' => $this->quota->userQuotaMb($user),
++                    'used_bytes' => (int) ($usedByUser[$user->getKey()] ?? 0),
++                ];
++            })->values(),
+         ];
+     }
+ 
+@@ -225,9 +231,12 @@ private function storeTenantSettings(Request $request): JsonResponse
+                 ]);
+ 
+             $allocatedMb = $users->sum(function (User $user) use ($overrides, $validated): int {
++                $existingQuota = array_key_exists('storage_quota_mb', $user->getAttributes())
++                    ? $user->getAttributes()['storage_quota_mb']
++                    : null;
+                 $requested = $overrides->has((int) $user->getKey())
+                     ? $overrides->get((int) $user->getKey())
+-                    : $user->storage_quota_mb;
++                    : $existingQuota;
+ 
+                 return $requested === null
+                     ? (int) $validated['default_user_quota_mb']
+diff --git a/Modules/Core/app/Support/HandlesScalableTabularExports.php b/Modules/Core/app/Support/HandlesScalableTabularExports.php
+index 8887980b2..d5a5b354d 100644
+--- a/Modules/Core/app/Support/HandlesScalableTabularExports.php
++++ b/Modules/Core/app/Support/HandlesScalableTabularExports.php
+@@ -110,38 +110,19 @@ protected function streamCsvDownload(
+             $streamQuery = clone $query;
+             $chunkSize = $this->csvChunkSize();
+ 
+-            $orders = $streamQuery->getQuery()->orders ?? [];
+-            $hasCustomNonIdOrder = ! empty($orders) && ! (count($orders) === 1 && in_array($orders[0]['column'] ?? '', ['id', $streamQuery->getModel()->getTable().'.id'], true) && ($orders[0]['direction'] ?? 'asc') === 'asc');
+-
+-            $keyType = $streamQuery->getModel()->getKeyType();
+-            $isIntegerKey = in_array($keyType, ['int', 'integer'], true) || $streamQuery->getModel()->getIncrementing();
+-
+-            if (! $hasCustomNonIdOrder && $isIntegerKey) {
+-                $streamQuery->chunkById($chunkSize, function ($records) use (&$rowNumber, $mapRow, $output) {
+-                    foreach ($records as $record) {
+-                        $rowNumber++;
+-                        fputcsv($output, $mapRow($record, $rowNumber));
+-                    }
+-
+-                    if (function_exists('ob_flush')) {
+-                        @ob_flush();
+-                    }
+-
+-                    flush();
+-                });
+-            } else {
+-                $streamQuery->chunk($chunkSize, function ($records) use (&$rowNumber, $mapRow, $output) {
+-                    foreach ($records as $record) {
+-                        $rowNumber++;
+-                        fputcsv($output, $mapRow($record, $rowNumber));
+-                    }
++            // Use lazy() instead of chunk()/chunkById(): custom sort orders and
++            // eager-loaded relations can leave chunk-based exports with headers only.
++            foreach ($streamQuery->lazy($chunkSize) as $record) {
++                $rowNumber++;
++                fputcsv($output, $mapRow($record, $rowNumber));
+ 
++                if ($rowNumber % $chunkSize === 0) {
+                     if (function_exists('ob_flush')) {
+                         @ob_flush();
+                     }
+ 
+                     flush();
+-                });
++                }
+             }
+ 
+             fclose($output);
+diff --git a/Modules/Core/app/Support/ModuleRegistry.php b/Modules/Core/app/Support/ModuleRegistry.php
+index 5c224fecd..f29ccac05 100644
+--- a/Modules/Core/app/Support/ModuleRegistry.php
++++ b/Modules/Core/app/Support/ModuleRegistry.php
+@@ -2,6 +2,10 @@
+ 
+ namespace Modules\Core\Support;
+ 
++use Illuminate\Support\Collection;
++use Illuminate\Support\Str;
++use Modules\Subscription\Support\TenantModuleCatalog;
++
+ class ModuleRegistry
+ {
+     public function __construct(
+@@ -13,6 +17,65 @@ public function all(): array
+         return $this->modules ?? config('modular_monolith.modules', []);
+     }
+ 
++    /** The same registered product catalog used by the dashboard and assistant. */
++    public function catalog(): Collection
++    {
++        $catalog = collect(TenantModuleCatalog::catalogWithPricing())
++            ->unique('slug')
++            ->map(fn (array $module): array => array_merge($module, [
++                'registry_enabled' => false,
++                'is_subscription_catalog' => true,
++            ]))
++            ->keyBy('slug');
++        $registryAliases = [
++            'LearningManagement' => 'learning_management',
++            'MailBox' => 'mailbox',
++            'B2BMarketplace' => 'b2b_marketplace',
++            'Inventory' => 'inventory_control',
++            'Warehouse' => 'warehouse_management',
++            'Production' => 'production_management',
++            'Workflow' => 'workflow_automation',
++            'ProjectManagement' => 'project_management',
++            'HumanResources' => 'human_resources',
++            'Attendance' => 'attendance_management',
++            'Payroll' => 'payroll_management',
++            'Finance' => 'financial_management',
++            'PerformanceManagement' => 'performance_management',
++            'ProcurementManagement' => 'procurement_management',
++            'SupplyChain' => 'supply_chain_management',
++            'Sales' => 'sales_management',
++            'Crm' => 'crm',
++            'Fleet' => 'fleet_management',
++            'ServiceManagement' => 'service_management',
++            'InternalAudit' => 'internal_audit',
++            'StrategicPlanning' => 'strategic_planning',
++            'Vantage' => 'vantage_bi',
++            'Agriculture' => 'agriculture',
++            'LandingTemplates' => 'premium_landing_templates',
++            'SupportBot' => 'support_bot',
++        ];
++        $registeredModules = json_decode((string) @file_get_contents(base_path('modules_statuses.json')), true);
++        foreach (is_array($registeredModules) ? $registeredModules : [] as $moduleName => $enabled) {
++            $slug = $registryAliases[$moduleName] ?? Str::snake($moduleName);
++            if ($catalog->has($slug)) {
++                $catalog->put($slug, array_merge($catalog->get($slug), ['registry_enabled' => (bool) $enabled]));
++
++                continue;
++            }
++
++            $catalog->put($slug, [
++                'slug' => $slug,
++                'name' => Str::headline($moduleName),
++                'category' => 'Platform',
++                'monthly_price_etb' => 0,
++                'registry_enabled' => (bool) $enabled,
++                'is_subscription_catalog' => false,
++            ]);
++        }
++
++        return $catalog->values();
++    }
++
+     public function get(string $key): ?array
+     {
+         return $this->all()[$key] ?? null;
+diff --git a/Modules/Core/app/Support/TenantStorageQuota.php b/Modules/Core/app/Support/TenantStorageQuota.php
+index 01829d467..280f77234 100644
+--- a/Modules/Core/app/Support/TenantStorageQuota.php
++++ b/Modules/Core/app/Support/TenantStorageQuota.php
+@@ -38,7 +38,11 @@ public function defaultUserQuotaMb(): int
+ 
+     public function userQuotaMb(User $user): int
+     {
+-        $quota = $user->storage_quota_mb;
++        // Guard MissingAttributeException under Model::shouldBeStrict() when the
++        // column is not yet migrated or was omitted from a selective select().
++        $quota = array_key_exists('storage_quota_mb', $user->getAttributes())
++            ? $user->getAttributes()['storage_quota_mb']
++            : null;
+ 
+         return $quota === null ? $this->defaultUserQuotaMb() : max(0, (int) $quota);
+     }
+diff --git a/Modules/HumanResources/app/Http/Controllers/EmployeeIdentityCardController.php b/Modules/HumanResources/app/Http/Controllers/EmployeeIdentityCardController.php
+index daad42bdd..7a1001151 100644
+--- a/Modules/HumanResources/app/Http/Controllers/EmployeeIdentityCardController.php
++++ b/Modules/HumanResources/app/Http/Controllers/EmployeeIdentityCardController.php
+@@ -6,6 +6,7 @@
+ use Illuminate\Database\Eloquent\Builder;
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
++use Illuminate\Support\Str;
+ use Modules\Core\Support\DataTableSearch;
+ use Modules\HumanResources\Http\Requests\IssueIdentityCardsRequest;
+ use Modules\HumanResources\Http\Requests\RenewIdentityCardRequest;
+@@ -76,12 +77,14 @@ public function eligibleEmployees(Request $request): JsonResponse
+ 
+         return response()->json(['data' => $employees->map(fn (Employee $employee): array => [
+             'id' => $employee->id, 'employee_number' => $employee->employee_number, 'primary_name' => $employee->primary_name,
+-            'work_email' => $employee->work_email, 'profile_photo_path' => $employee->profile_photo_path,
++            'preferred_name' => $employee->preferred_name, 'work_email' => $employee->work_email, 'phone' => $employee->phone,
++            'profile_photo_path' => $employee->resolveCredentialPhotoPath(),
++            'user_id' => $employee->user_id,
+             'employment_status' => $employee->employment_status,
+             'organization_unit' => $employee->primaryAssignment?->organizationUnit?->name,
+             'position' => $employee->primaryAssignment?->position?->title,
+             'active_card' => $employee->identityCards->first()
+-                ? (new EmployeeIdentityCardResource($employee->identityCards->first()))->resolve() : null,
++                ? (new EmployeeIdentityCardResource($employee->identityCards->first()->loadMissing(['employee.primaryAssignment.organizationUnit', 'employee.primaryAssignment.position', 'template'])))->resolve() : null,
+         ])->values()]);
+     }
+ 
+@@ -129,10 +132,30 @@ public function renew(RenewIdentityCardRequest $request, int $identityCard): Emp
+         )->load($this->cardRelations()));
+     }
+ 
+-    public function verify(string $publicId): JsonResponse
++    public function verify(Request $request, ?string $publicId = null): JsonResponse
+     {
+         $this->cards->synchronizeExpiryStatuses();
+-        $card = EmployeeIdentityCard::query()->with($this->cardRelations())->where('public_id', $publicId)->firstOrFail();
++        $lookup = trim((string) (
++            $publicId
++            ?: $request->query('q', $request->query('card_number', $request->query('public_id', '')))
++        ));
++        abort_if($lookup === '', 422, 'Provide a verification UUID, QR link ID, or card number.');
++
++        $normalizedCardNumber = strtoupper($lookup);
++        $query = EmployeeIdentityCard::query()->with($this->cardRelations());
++
++        // public_id is a Postgres UUID column. Comparing a card number like
++        // HID-2026-XXXX against it raises SQLSTATE 22P02, so only use that
++        // predicate when the lookup is actually a UUID.
++        if (Str::isUuid($lookup)) {
++            $card = (clone $query)->where('public_id', $lookup)->first()
++                ?? (clone $query)->whereRaw('UPPER(card_number) = ?', [$normalizedCardNumber])->first();
++        } else {
++            $card = $query->whereRaw('UPPER(card_number) = ?', [$normalizedCardNumber])->first();
++        }
++
++        abort_if($card === null, 404, 'No identity card matched that verification ID or card number.');
++
+         $resource = (new EmployeeIdentityCardResource($card))->resolve();
+ 
+         return response()->json(['data' => [
+@@ -147,6 +170,9 @@ public function verify(string $publicId): JsonResponse
+                     'employment_status' => $resource['employee']['employment_status'] ?? null,
+                     'organization_unit' => $resource['employee']['primary_assignment']['organization_unit']['name'] ?? null,
+                     'position' => $resource['employee']['primary_assignment']['position']['title'] ?? null,
++                    'phone' => $resource['snapshot']['phone'] ?? null,
++                    'work_email' => $resource['employee']['work_email'] ?? ($resource['snapshot']['work_email'] ?? null),
++                    'profile_photo_path' => $resource['employee']['profile_photo_path'] ?? ($resource['snapshot']['profile_photo_path'] ?? null),
+                 ],
+                 'template_name' => $resource['template']['name'] ?? null,
+             ],
+@@ -155,6 +181,10 @@ public function verify(string $publicId): JsonResponse
+ 
+     private function cardRelations(): array
+     {
+-        return ['employee.primaryAssignment.organizationUnit', 'employee.primaryAssignment.position', 'template'];
++        return [
++            'employee.primaryAssignment.organizationUnit',
++            'employee.primaryAssignment.position',
++            'template',
++        ];
+     }
+ }
+diff --git a/Modules/HumanResources/app/Http/Controllers/ScheduleTemplateController.php b/Modules/HumanResources/app/Http/Controllers/ScheduleTemplateController.php
+index e7788dc25..c0b6beb76 100644
+--- a/Modules/HumanResources/app/Http/Controllers/ScheduleTemplateController.php
++++ b/Modules/HumanResources/app/Http/Controllers/ScheduleTemplateController.php
+@@ -4,6 +4,7 @@
+ 
+ use App\Http\Controllers\Controller;
+ use Carbon\CarbonImmutable;
++use Illuminate\Database\Eloquent\Collection as EloquentCollection;
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\DB;
+@@ -250,7 +251,8 @@ public function assign(Request $request, ScheduleTemplate $scheduleTemplate): Js
+         });
+ 
+         return response()->json([
+-            'data' => $assignments->load(['template', 'employee', 'organizationUnit', 'position']),
++            'data' => (new EloquentCollection($assignments->all()))
++                ->load(['template', 'employee', 'organizationUnit', 'position']),
+         ], 201);
+     }
+ }
+diff --git a/Modules/HumanResources/app/Http/Resources/EmployeeIdentityCardResource.php b/Modules/HumanResources/app/Http/Resources/EmployeeIdentityCardResource.php
+index d99c77a43..4bab46c2d 100644
+--- a/Modules/HumanResources/app/Http/Resources/EmployeeIdentityCardResource.php
++++ b/Modules/HumanResources/app/Http/Resources/EmployeeIdentityCardResource.php
+@@ -21,7 +21,9 @@ public function toArray(Request $request): array
+             'employee' => $this->when($this->relationLoaded('employee'), fn (): array => [
+                 'id' => $this->employee->id, 'employee_number' => $this->employee->employee_number,
+                 'primary_name' => $this->employee->primary_name, 'preferred_name' => $this->employee->preferred_name,
+-                'work_email' => $this->employee->work_email, 'profile_photo_path' => $this->employee->profile_photo_path,
++                'work_email' => $this->employee->work_email,
++                'profile_photo_path' => $this->employee->resolveCredentialPhotoPath()
++                    ?? (is_array($this->snapshot) ? ($this->snapshot['profile_photo_path'] ?? null) : null),
+                 'employment_status' => $this->employee->employment_status,
+                 'primary_assignment' => $this->employee->primaryAssignment ? [
+                     'organization_unit' => $this->employee->primaryAssignment->organizationUnit ? [
+diff --git a/Modules/HumanResources/app/Models/Employee.php b/Modules/HumanResources/app/Models/Employee.php
+index 781acf480..5140ec0ad 100644
+--- a/Modules/HumanResources/app/Models/Employee.php
++++ b/Modules/HumanResources/app/Models/Employee.php
+@@ -154,6 +154,38 @@ public function identityCards(): HasMany
+         return $this->hasMany(EmployeeIdentityCard::class)->latest('issued_on');
+     }
+ 
++    public function resolveCredentialPhotoPath(): ?string
++    {
++        $profilePhoto = trim((string) ($this->profile_photo_path ?? ''));
++        if ($profilePhoto !== '') {
++            return $profilePhoto;
++        }
++
++        $user = null;
++        if ($this->user_id) {
++            $user = User::query()->find($this->user_id);
++        }
++
++        if (! $user && filled($this->work_email)) {
++            $user = User::query()
++                ->whereRaw('LOWER(email) = ?', [strtolower(trim((string) $this->work_email))])
++                ->first();
++        }
++
++        if (! $user) {
++            return null;
++        }
++
++        $avatarUrl = trim((string) ($user->avatar_url ?? ''));
++        if ($avatarUrl !== '') {
++            return $avatarUrl;
++        }
++
++        $avatarPath = trim((string) ($user->avatar_path ?? ''));
++
++        return $avatarPath !== '' ? $avatarPath : null;
++    }
++
+     public function dynamicQrSessions(): HasMany
+     {
+         return $this->hasMany(DynamicQrSession::class);
+diff --git a/Modules/HumanResources/app/Support/AttendanceIndustryPresetService.php b/Modules/HumanResources/app/Support/AttendanceIndustryPresetService.php
+index 889a9766f..e5e5fefb7 100644
+--- a/Modules/HumanResources/app/Support/AttendanceIndustryPresetService.php
++++ b/Modules/HumanResources/app/Support/AttendanceIndustryPresetService.php
+@@ -45,36 +45,12 @@ public function apply(string $preset, ?Authenticatable $actor): array
+             $shifts = [];
+ 
+             foreach ($this->waterBottlingShifts($timezone) as $code => $attributes) {
+-                $shift = WorkSchedule::query()->firstOrCreate(
+-                    ['code' => $code],
+-                    $attributes,
+-                );
+-                $createdShifts += $shift->wasRecentlyCreated ? 1 : 0;
++                [$shift, $created] = $this->restoreOrCreateWorkSchedule($code, $attributes);
++                $createdShifts += $created ? 1 : 0;
+                 $shifts[$code] = $shift;
+             }
+ 
+-            $template = ScheduleTemplate::query()->firstOrCreate(
+-                ['code' => 'WB-ROT-3SHIFT', 'version' => 1],
+-                [
+-                    'name' => 'Water bottling three-crew rotation',
+-                    'description' => 'Five day shifts, two rest days, five evening shifts, two rest days, five night shifts, and two recovery days.',
+-                    'timezone' => $timezone,
+-                    'cycle_length_days' => 21,
+-                    'rotation_direction' => 'forward',
+-                    'anchor_date' => now($timezone)->startOfWeek()->toDateString(),
+-                    'holiday_treatment' => 'use_shift',
+-                    'effective_from' => now($timezone)->toDateString(),
+-                    'is_active' => true,
+-                    'metadata' => [
+-                        'industry' => 'water_bottling',
+-                        'preset' => 'water_bottling_24x7',
+-                        'crew_count' => 3,
+-                        'assignment_required' => true,
+-                    ],
+-                    'created_by' => $actorId,
+-                    'updated_by' => $actorId,
+-                ],
+-            );
++            [$template, $createdRotation] = $this->restoreOrCreateRotation($timezone, $actorId);
+             $createdDays = 0;
+             foreach ($this->rotationDays() as $day) {
+                 $scheduleCode = $day['schedule_code'];
+@@ -94,7 +70,7 @@ public function apply(string $preset, ?Authenticatable $actor): array
+                 'preset' => 'water_bottling_24x7',
+                 'created_shift_count' => $createdShifts,
+                 'existing_shift_count' => count($shifts) - $createdShifts,
+-                'created_rotation' => $template->wasRecentlyCreated,
++                'created_rotation' => $createdRotation,
+                 'created_rotation_day_count' => $createdDays,
+                 'assignment_required' => true,
+                 'shifts' => collect($shifts)->values(),
+@@ -103,6 +79,70 @@ public function apply(string $preset, ?Authenticatable $actor): array
+         });
+     }
+ 
++    /**
++     * Soft-deleted preset rows still hold the unique (tenant_id, code) key, so
++     * firstOrCreate alone can throw. Restore and reactivate when present.
++     *
++     * @param  array<string, mixed>  $attributes
++     * @return array{0: WorkSchedule, 1: bool}
++     */
++    private function restoreOrCreateWorkSchedule(string $code, array $attributes): array
++    {
++        $shift = WorkSchedule::withTrashed()->firstOrNew(['code' => $code]);
++        $created = ! $shift->exists;
++
++        if ($shift->trashed()) {
++            $shift->restore();
++        }
++
++        $shift->fill([
++            ...$attributes,
++            'is_active' => true,
++        ])->save();
++
++        return [$shift->refresh(), $created];
++    }
++
++    /**
++     * @return array{0: ScheduleTemplate, 1: bool}
++     */
++    private function restoreOrCreateRotation(string $timezone, mixed $actorId): array
++    {
++        $template = ScheduleTemplate::withTrashed()->firstOrNew([
++            'code' => 'WB-ROT-3SHIFT',
++            'version' => 1,
++        ]);
++        $created = ! $template->exists;
++
++        if ($template->trashed()) {
++            $template->restore();
++        }
++
++        $template->fill([
++            'name' => 'Water bottling three-crew rotation',
++            'description' => 'Five day shifts, two rest days, five evening shifts, two rest days, five night shifts, and two recovery days.',
++            'timezone' => $timezone,
++            'cycle_length_days' => 21,
++            'rotation_direction' => 'forward',
++            'anchor_date' => $template->anchor_date?->toDateString()
++                ?? now($timezone)->startOfWeek()->toDateString(),
++            'holiday_treatment' => 'use_shift',
++            'effective_from' => $template->effective_from?->toDateString()
++                ?? now($timezone)->toDateString(),
++            'is_active' => true,
++            'metadata' => [
++                'industry' => 'water_bottling',
++                'preset' => 'water_bottling_24x7',
++                'crew_count' => 3,
++                'assignment_required' => true,
++            ],
++            'updated_by' => $actorId,
++            ...($created ? ['created_by' => $actorId] : []),
++        ])->save();
++
++        return [$template->refresh(), $created];
++    }
++
+     /**
+      * @return array<string, array<string, mixed>>
+      */
+@@ -123,7 +163,7 @@ private function waterBottlingShifts(string $timezone): array
+ 
+         return [
+             'WB-PROD-DAY' => [
+-                'name' => 'Production �w^~)�t day',
++                'name' => 'Production day',
+                 'category' => 'production',
+                 'color' => '#1D4ED8',
+                 'shift_type' => 'fixed',
+@@ -140,7 +180,7 @@ private function waterBottlingShifts(string $timezone): array
+                 'is_active' => true,
+             ],
+             'WB-PROD-EVE' => [
+-                'name' => 'Production+�u���T evening',
++                'name' => 'Production evening',
+                 'category' => 'production',
+                 'color' => '#6D28D9',
+                 'shift_type' => 'fixed',
+@@ -157,7 +197,7 @@ private function waterBottlingShifts(string $timezone): array
+                 'is_active' => true,
+             ],
+             'WB-PROD-NIGHT' => [
+-                'name' => 'Production"��y��y� night',
++                'name' => 'Production night',
+                 'category' => 'production',
+                 'color' => '#334155',
+                 'shift_type' => 'fixed',
+diff --git a/Modules/HumanResources/app/Support/EmployeeIdentityCardService.php b/Modules/HumanResources/app/Support/EmployeeIdentityCardService.php
+index dfaa84698..d62c50b10 100644
+--- a/Modules/HumanResources/app/Support/EmployeeIdentityCardService.php
++++ b/Modules/HumanResources/app/Support/EmployeeIdentityCardService.php
+@@ -110,7 +110,7 @@ private function snapshot(Employee $employee): array
+             'organization_name' => (string) (tenant('name') ?? config('app.name', 'HIVE.OS')),
+             'employee_number' => $employee->employee_number, 'primary_name' => $employee->primary_name,
+             'preferred_name' => $employee->preferred_name, 'work_email' => $employee->work_email,
+-            'phone' => $employee->phone, 'profile_photo_path' => $employee->profile_photo_path,
++            'phone' => $employee->phone, 'profile_photo_path' => $employee->resolveCredentialPhotoPath(),
+             'hired_on' => $employee->hired_on?->toDateString(), 'position' => $assignment?->position?->title,
+             'organization_unit' => $assignment?->organizationUnit?->name,
+         ];
+diff --git a/Modules/HumanResources/routes/api.php b/Modules/HumanResources/routes/api.php
+index afe1434eb..ae9badf4e 100644
+--- a/Modules/HumanResources/routes/api.php
++++ b/Modules/HumanResources/routes/api.php
+@@ -91,6 +91,8 @@
+         ->middleware('permission:view_employee_id_cards|manage_employee_id_cards,sanctum')->name('identity-cards.workspace');
+     Route::get('identity-cards/eligible-employees', [EmployeeIdentityCardController::class, 'eligibleEmployees'])
+         ->middleware('permission:view_employee_id_cards|manage_employee_id_cards,sanctum')->name('identity-cards.eligible-employees');
++    Route::get('identity-cards/verify', [EmployeeIdentityCardController::class, 'verify'])
++        ->middleware('permission:view_employee_id_cards|manage_employee_id_cards,sanctum')->name('identity-cards.verify.query');
+     Route::get('identity-cards/verify/{publicId}', [EmployeeIdentityCardController::class, 'verify'])
+         ->whereUuid('publicId')
+         ->middleware('permission:view_employee_id_cards|manage_employee_id_cards,sanctum')->name('identity-cards.verify');
+diff --git a/Modules/Identity/app/Support/AccessControlCatalog.php b/Modules/Identity/app/Support/AccessControlCatalog.php
+index 9780a1521..832319376 100644
+--- a/Modules/Identity/app/Support/AccessControlCatalog.php
++++ b/Modules/Identity/app/Support/AccessControlCatalog.php
+@@ -2794,6 +2794,7 @@ public static function inventoryReadPermissions(): array
+             'view_stock_ledger',
+             'view_inventory_counts',
+             'view_inventory_reports',
++            'view_inventory_counts',
+             'export_inventory_reports',
+             'export_inventory_catalog',
+             'export_inventory_coa',
+@@ -2907,6 +2908,8 @@ public static function inventoryRoles(): array
+                     'edit_inventory_suppliers',
+                     'generate_inventory_barcodes',
+                     'manage_product_assets',
++                    'enter_inventory_counts',
++                    'manage_inventory_counts',
+                 ],
+             )),
+ 
+diff --git a/Modules/Identity/database/migrations/2026_09_23_160000_add_storage_quota_to_users_table.php b/Modules/Identity/database/migrations/2026_09_23_160000_add_storage_quota_to_users_table.php
+index 195f65d20..87cd99cb6 100644
+--- a/Modules/Identity/database/migrations/2026_09_23_160000_add_storage_quota_to_users_table.php
++++ b/Modules/Identity/database/migrations/2026_09_23_160000_add_storage_quota_to_users_table.php
+@@ -8,6 +8,10 @@
+ {
+     public function up(): void
+     {
++        if (Schema::hasColumn('users', 'storage_quota_mb')) {
++            return;
++        }
++
+         Schema::table('users', function (Blueprint $table): void {
+             $table->unsignedBigInteger('storage_quota_mb')->nullable()->after('is_active');
+         });
+@@ -15,6 +19,10 @@ public function up(): void
+ 
+     public function down(): void
+     {
++        if (! Schema::hasColumn('users', 'storage_quota_mb')) {
++            return;
++        }
++
+         Schema::table('users', function (Blueprint $table): void {
+             $table->dropColumn('storage_quota_mb');
+         });
+diff --git a/Modules/Identity/database/migrations/tenant/2026_09_23_160000_add_storage_quota_to_users_table.php b/Modules/Identity/database/migrations/tenant/2026_09_23_160000_add_storage_quota_to_users_table.php
+index 195f65d20..87cd99cb6 100644
+--- a/Modules/Identity/database/migrations/tenant/2026_09_23_160000_add_storage_quota_to_users_table.php
++++ b/Modules/Identity/database/migrations/tenant/2026_09_23_160000_add_storage_quota_to_users_table.php
+@@ -8,6 +8,10 @@
+ {
+     public function up(): void
+     {
++        if (Schema::hasColumn('users', 'storage_quota_mb')) {
++            return;
++        }
++
+         Schema::table('users', function (Blueprint $table): void {
+             $table->unsignedBigInteger('storage_quota_mb')->nullable()->after('is_active');
+         });
+@@ -15,6 +19,10 @@ public function up(): void
+ 
+     public function down(): void
+     {
++        if (! Schema::hasColumn('users', 'storage_quota_mb')) {
++            return;
++        }
++
+         Schema::table('users', function (Blueprint $table): void {
+             $table->dropColumn('storage_quota_mb');
+         });
+diff --git a/Modules/Inventory/app/Http/Controllers/GoodController.php b/Modules/Inventory/app/Http/Controllers/GoodController.php
+index 5860548d1..cb64fc6f9 100644
+--- a/Modules/Inventory/app/Http/Controllers/GoodController.php
++++ b/Modules/Inventory/app/Http/Controllers/GoodController.php
+@@ -12,6 +12,7 @@
+ use Modules\Inventory\Enums\UomEnum;
+ use Modules\Inventory\Models\Good;
+ use Modules\Inventory\Models\GoodBatch;
++use Modules\Inventory\Models\InventoryItem;
+ use Modules\Inventory\Models\ProductCategory;
+ use Modules\Inventory\Models\Supplier;
+ use Modules\Inventory\Support\InventoryTenantContext;
+@@ -264,6 +265,7 @@ public function store(Request $request)
+             'preferred_supplier_id' => ['nullable', 'integer'],
+             'track_batches' => ['nullable', 'boolean'],
+             'track_expiry' => ['nullable', 'boolean'],
++            'track_serials' => ['nullable', 'boolean'],
+             'shelf_life_days' => ['nullable', 'integer', 'min:1'],
+             'expiry_alert_days' => ['nullable', 'integer', 'min:1'],
+             'image' => ['nullable', 'string'],
+@@ -414,6 +416,10 @@ public function store(Request $request)
+                 ->sum('on_hand');
+             $good->save();
+ 
++            // Procurement PO/GRN lines select InventoryItem, not Good. Keep a
++            // 1:1 active bridge so catalog goods appear in the PO item dropdown.
++            $this->syncProcurementInventoryItem($good);
++
+             return $good;
+         });
+ 
+@@ -460,6 +466,7 @@ public function update(Request $request, $id)
+             'preferred_supplier_id' => ['nullable', 'integer'],
+             'track_batches' => ['nullable', 'boolean'],
+             'track_expiry' => ['nullable', 'boolean'],
++            'track_serials' => ['nullable', 'boolean'],
+             'shelf_life_days' => ['nullable', 'integer', 'min:1'],
+             'expiry_alert_days' => ['nullable', 'integer', 'min:1'],
+             'image' => ['nullable', 'string'],
+@@ -513,6 +520,8 @@ public function update(Request $request, $id)
+                 }
+                 $good->suppliers()->sync($attachData);
+             }
++
++            $this->syncProcurementInventoryItem($good->fresh());
+         });
+ 
+         return response()->json($good->fresh(['category', 'preferredSupplier', 'primaryWarehouse', 'defaultLocation']));
+@@ -738,9 +747,20 @@ public function transferLocation(Request $request, $id)
+     {
+         $good = Good::query()->findOrFail($id);
+ 
++        $tenantId = InventoryTenantContext::id();
++
+         $validated = $request->validate([
+-            'from_location_id' => ['required', 'integer', 'exists:warehouse_locations,id'],
+-            'to_location_id' => ['required', 'integer', 'different:from_location_id', 'exists:warehouse_locations,id'],
++            'from_location_id' => [
++                'required',
++                'integer',
++                Rule::exists('central.warehouse_locations', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
++            ],
++            'to_location_id' => [
++                'required',
++                'integer',
++                'different:from_location_id',
++                Rule::exists('central.warehouse_locations', 'id')->where(fn ($q) => $q->where('tenant_id', $tenantId)),
++            ],
+             'quantity' => ['required', 'numeric', 'min:0.0001'],
+             'batch_number' => ['nullable', 'string', 'max:100'],
+             'notes' => ['nullable', 'string', 'max:1000'],
+@@ -750,10 +770,11 @@ public function transferLocation(Request $request, $id)
+         $qty = (float) $validated['quantity'];
+         $fromId = (int) $validated['from_location_id'];
+         $toId = (int) $validated['to_location_id'];
+-        $batch = $validated['batch_number'] ?? null;
++        $batchFilter = isset($validated['batch_number']) ? trim((string) $validated['batch_number']) : '';
++        $batchFilter = $batchFilter !== '' ? $batchFilter : null;
+         $idempotencyKey = $validated['idempotency_key'] ?? null;
+ 
+-        DB::transaction(function () use ($good, $fromId, $toId, $qty, $batch, $validated, $idempotencyKey) {
++        DB::connection('central')->transaction(function () use ($good, $fromId, $toId, $qty, $batchFilter, $validated, $idempotencyKey) {
+             // Idempotent retry: same key → the transfer was already applied.
+             if ($idempotencyKey && StockMovement::query()
+                 ->where('tenant_id', $good->tenant_id)
+@@ -762,31 +783,77 @@ public function transferLocation(Request $request, $id)
+                 return;
+             }
+ 
+-            // Acquire the two location balances in a deterministic (ascending id)
+-            // order so concurrent A→B and B→A transfers cannot deadlock.
++            $good = Good::query()->whereKey($good->getKey())->lockForUpdate()->firstOrFail();
++
++            // Acquire balances in ascending location id order to avoid A↔B deadlocks.
+             foreach (($fromId < $toId ? [$fromId, $toId] : [$toId, $fromId]) as $lockId) {
+                 WarehouseStock::query()
+                     ->where('warehouse_location_id', $lockId)
+                     ->where('good_id', $good->id)
+-                    ->where('batch_number', $batch)
+                     ->lockForUpdate()
+-                    ->first();
++                    ->get();
+             }
+ 
+-            $fromStock = WarehouseStock::query()
++            $fromQuery = WarehouseStock::query()
+                 ->where('warehouse_location_id', $fromId)
+                 ->where('good_id', $good->id)
+-                ->where('batch_number', $batch)
+-                ->first();
++                ->where('on_hand', '>', 0);
++
++            if ($batchFilter !== null) {
++                $fromQuery->where('batch_number', $batchFilter);
++            }
++
++            $fromRows = $fromQuery->get();
++
++            if ($fromRows->isEmpty()) {
++                $elsewhere = WarehouseStock::query()
++                    ->where('good_id', $good->id)
++                    ->where('on_hand', '>', 0)
++                    ->with('location:id,name,code')
++                    ->get(['warehouse_location_id', 'batch_number', 'on_hand']);
++
++                if ($elsewhere->isNotEmpty()) {
++                    $hint = $elsewhere->map(function ($row) {
++                        $loc = $row->location;
++                        $label = $loc
++                            ? trim(($loc->code ? "[{$loc->code}] " : '').$loc->name)
++                            : "location #{$row->warehouse_location_id}";
++                        $lot = $row->batch_number ? " lot {$row->batch_number}" : '';
++
++                        return "{$label}{$lot}: ".(float) $row->on_hand;
++                    })->implode('; ');
++
++                    throw ValidationException::withMessages([
++                        'from_location_id' => [
++                            'No stock at the selected source location'.($batchFilter ? " for lot {$batchFilter}" : '').". Available elsewhere: {$hint}.",
++                        ],
++                    ]);
++                }
+ 
+-            // Sufficiency check inside the lock so it is atomic with the decrement
+-            // (no oversell / negative stock under concurrency).
+-            if (! $fromStock || (float) $fromStock->on_hand < $qty) {
+                 throw ValidationException::withMessages([
+                     'quantity' => ['Insufficient stock at source location to perform transfer.'],
+                 ]);
+             }
+ 
++            if ($batchFilter === null && $fromRows->count() > 1) {
++                $lots = $fromRows->map(fn ($row) => ($row->batch_number ?: '(no lot)').': '.(float) $row->on_hand)->implode(', ');
++                throw ValidationException::withMessages([
++                    'batch_number' => ["This location has multiple lots ({$lots}). Choose which batch to transfer."],
++                ]);
++            }
++
++            $fromStock = $fromRows->first();
++            $batch = $fromStock->batch_number;
++
++            // Sufficiency check inside the lock so it is atomic with the decrement.
++            if ((float) $fromStock->on_hand < $qty) {
++                throw ValidationException::withMessages([
++                    'quantity' => [
++                        'Insufficient stock at source location to perform transfer. Available: '.(float) $fromStock->on_hand.'.',
++                    ],
++                ]);
++            }
++
+             $fromStock->on_hand = (float) $fromStock->on_hand - $qty;
+             $fromStock->save();
+ 
+@@ -805,11 +872,13 @@ public function transferLocation(Request $request, $id)
+             $toStock->on_hand = (float) ($toStock->on_hand ?? 0) + $qty;
+             $toStock->unit_cost = $fromStock->unit_cost;
+             $toStock->expiry_date = $fromStock->expiry_date;
++            $toStock->good_batch_id = $fromStock->good_batch_id;
+             $toStock->save();
+ 
+             StockMovement::create([
+                 'tenant_id' => $good->tenant_id,
+                 'good_id' => $good->id,
++                'good_batch_id' => $fromStock->good_batch_id,
+                 'from_location_id' => $fromId,
+                 'to_location_id' => $toId,
+                 'type' => 'transfer',
+@@ -822,6 +891,11 @@ public function transferLocation(Request $request, $id)
+                 'notes' => $validated['notes'] ?? 'Inter-location transfer',
+                 'performed_by_id' => auth()->id(),
+             ]);
++
++            $good->quantity_on_hand = (float) WarehouseStock::query()
++                ->where('good_id', $good->id)
++                ->sum('on_hand');
++            $good->save();
+         });
+ 
+         return response()->json([
+@@ -953,6 +1027,40 @@ protected function generateUniqueSku(string $type): string
+         return "{$pfx}-{$random}";
+     }
+ 
++    /**
++     * Durable procurement bridge: PO/GRN lines select InventoryItem, and posting
++     * resolves stock onto Good via inventory_items.good_id. Keep one active item
++     * projected from each catalog Good (Sales already treats this as a projection).
++     */
++    protected function syncProcurementInventoryItem(Good $good): InventoryItem
++    {
++        $item = InventoryItem::query()->where('good_id', $good->id)->first()
++            ?: InventoryItem::query()->where('sku', $good->sku)->first();
++
++        $payload = [
++            'tenant_id' => $good->tenant_id,
++            'good_id' => $good->id,
++            'sku' => $good->sku,
++            'name' => $good->name,
++            'unit' => $good->uom ?: 'units',
++            'reorder_level' => (float) ($good->reorder_level ?? 0),
++            'cost_price' => (float) ($good->unit_cost ?? 0),
++            'selling_price' => (float) ($good->unit_cost ?? 0),
++            'is_active' => (bool) ($good->is_active ?? ($good->status === 'active')),
++            // Projection only — never invent physical stock here.
++            'current_stock' => (float) ($good->quantity_on_hand ?? 0),
++        ];
++
++        if ($item) {
++            $item->fill($payload);
++            $item->save();
++
++            return $item;
++        }
++
++        return InventoryItem::query()->create($payload);
++    }
++
+     protected function generateBarcodeValue(string $prefix): string
+     {
+         return $prefix.str_pad((string) random_int(10000000, 99999999), 9, '0', STR_PAD_LEFT);
+diff --git a/Modules/Inventory/app/Http/Controllers/InventoryExportController.php b/Modules/Inventory/app/Http/Controllers/InventoryExportController.php
+index ea41ffc27..25868bd5e 100644
+--- a/Modules/Inventory/app/Http/Controllers/InventoryExportController.php
++++ b/Modules/Inventory/app/Http/Controllers/InventoryExportController.php
+@@ -14,6 +14,7 @@
+ use Modules\Core\Support\ResolvesExportBranding;
+ use Modules\Inventory\Exports\GenericRowsExport;
+ use Modules\Inventory\Models\InventoryEntityRecord;
++use Modules\Inventory\Models\InventoryItem;
+ use Modules\Inventory\Models\Product;
+ use Modules\Inventory\Models\ProductCategory;
+ use Modules\Inventory\Models\Supplier;
+@@ -93,6 +94,72 @@ public function products(Request $request): JsonResponse|StreamedResponse|Respon
+         );
+     }
+ 
++    public function items(Request $request): JsonResponse|StreamedResponse|Response
++    {
++        $query = InventoryItem::query()->with([
++            'category:id,name',
++            'good:id,sku,name',
++        ]);
++
++        if ($request->filled('ids')) {
++            $query->whereIn('id', $this->normalizeIds($request->input('ids')));
++        } else {
++            if ($request->filled('search')) {
++                $term = '%'.trim((string) $request->input('search')).'%';
++                $query->where(function (Builder $builder) use ($term): void {
++                    $builder
++                        ->where('name', 'ilike', $term)
++                        ->orWhere('sku', 'ilike', $term)
++                        ->orWhere('unit', 'ilike', $term);
++                });
++            }
++
++            if ($request->filled('category_id')) {
++                $query->where('category_id', (int) $request->input('category_id'));
++            }
++
++            if ($request->boolean('active_only')) {
++                $query->where('is_active', true);
++            }
++
++            if ($request->boolean('low_stock_only')) {
++                $query->whereColumn('current_stock', '<=', 'reorder_level');
++            }
++        }
++
++        $this->applySort($request, $query, [
++            'created_at',
++            'name',
++            'sku',
++            'current_stock',
++            'reorder_level',
++            'selling_price',
++            'is_active',
++        ], 'name');
++
++        $columns = [
++            'SKU' => fn (InventoryItem $record) => $record->sku,
++            'Name' => fn (InventoryItem $record) => $record->name,
++            'Unit' => fn (InventoryItem $record) => $record->unit ?: '-',
++            'Category' => fn (InventoryItem $record) => $record->category?->name ?: 'Uncategorized',
++            'Linked Good' => fn (InventoryItem $record) => $record->good?->name ?: ($record->good_id ? 'Good #'.$record->good_id : 'Unlinked'),
++            'Stock' => fn (InventoryItem $record) => (string) $record->current_stock,
++            'Reorder Level' => fn (InventoryItem $record) => (string) $record->reorder_level,
++            'Cost Price' => fn (InventoryItem $record) => (string) $record->cost_price,
++            'Selling Price' => fn (InventoryItem $record) => (string) $record->selling_price,
++            'Status' => fn (InventoryItem $record) => $record->is_active ? 'Active' : 'Inactive',
++            'Created At' => fn (InventoryItem $record) => optional($record->created_at)->format('Y-m-d H:i:s') ?? '-',
++        ];
++
++        return $this->handleExport(
++            request: $request,
++            query: $query,
++            filenameBase: 'inventory_items_'.now()->format('Y-m-d_His'),
++            title: 'Inventory Items',
++            columns: $columns
++        );
++    }
++
+     public function productCategories(Request $request): JsonResponse|StreamedResponse|Response
+     {
+         $query = ProductCategory::query()
+@@ -411,7 +478,10 @@ protected function applySort(
+             $sortCol = $defaultColumn;
+         }
+ 
+-        $query->orderBy($sortCol, $sortDir);
++        $table = $query->getModel()->getTable();
++        $sortColumn = str_contains($sortCol, '.') ? $sortCol : "{$table}.{$sortCol}";
++
++        $query->orderBy($sortColumn, $sortDir);
+     }
+ 
+     /**
+diff --git a/Modules/Inventory/app/Http/Controllers/InventoryItemController.php b/Modules/Inventory/app/Http/Controllers/InventoryItemController.php
+index 95ac87ef9..29e447916 100644
+--- a/Modules/Inventory/app/Http/Controllers/InventoryItemController.php
++++ b/Modules/Inventory/app/Http/Controllers/InventoryItemController.php
+@@ -18,7 +18,10 @@ public function __construct(
+ 
+     public function index(Request $request)
+     {
+-        $query = InventoryItem::query()->with('category:id,name');
++        $query = InventoryItem::query()->with([
++            'category:id,name',
++            'good:id,sku,name,track_serials,quantity_on_hand,reserved_quantity,reorder_level,unit_cost,tax_rate,tax_type',
++        ]);
+ 
+         if ($request->filled('search')) {
+             $term = '%'.trim((string) $request->input('search')).'%';
+@@ -53,6 +56,7 @@ public function store(Request $request)
+     {
+         $validated = $request->validate([
+             'category_id' => ['nullable', 'exists:central.inventory_categories,id'],
++            'good_id' => ['nullable', 'integer', Rule::exists('central.goods', 'id')->where(fn ($q) => $q->where('tenant_id', InventoryTenantContext::id()))],
+             'sku' => ['nullable', 'string', 'max:80', Rule::unique('central.inventory_items', 'sku')->where(fn ($q) => $q->where('tenant_id', InventoryTenantContext::id()))],
+             'name' => ['required', 'string', 'max:120'],
+             'unit' => ['nullable', 'string', 'max:30'],
+@@ -120,6 +124,7 @@ public function update(Request $request, $id)
+ 
+         $validated = $request->validate([
+             'category_id' => ['nullable', 'exists:central.inventory_categories,id'],
++            'good_id' => ['nullable', 'integer', Rule::exists('central.goods', 'id')->where(fn ($q) => $q->where('tenant_id', InventoryTenantContext::id()))],
+             'sku' => ['sometimes', 'string', 'max:80', Rule::unique('central.inventory_items', 'sku')->ignore($item->id)->where(fn ($q) => $q->where('tenant_id', InventoryTenantContext::id()))],
+             'name' => ['sometimes', 'string', 'max:120'],
+             'unit' => ['sometimes', 'string', 'max:30'],
+diff --git a/Modules/Inventory/app/Http/Resources/InventoryCountLineResource.php b/Modules/Inventory/app/Http/Resources/InventoryCountLineResource.php
+index 69a57b552..33d4dbacd 100644
+--- a/Modules/Inventory/app/Http/Resources/InventoryCountLineResource.php
++++ b/Modules/Inventory/app/Http/Resources/InventoryCountLineResource.php
+@@ -6,7 +6,7 @@
+ use Illuminate\Http\Resources\Json\JsonResource;
+ 
+ /**
+- * One stocktake line (inventory_count_lines) — Phase 4G.1. Snapshot/expected/
++ * One stocktake line (inventory_count_lines) ΓÇö Phase 4G.1. Snapshot/expected/
+  * variance are server-derived and read-only to the client; carries no cost.
+  */
+ class InventoryCountLineResource extends JsonResource
+diff --git a/Modules/Inventory/app/Http/Resources/InventoryCountResource.php b/Modules/Inventory/app/Http/Resources/InventoryCountResource.php
+index ecc4d199f..f55a6b9e9 100644
+--- a/Modules/Inventory/app/Http/Resources/InventoryCountResource.php
++++ b/Modules/Inventory/app/Http/Resources/InventoryCountResource.php
+@@ -6,7 +6,7 @@
+ use Illuminate\Http\Resources\Json\JsonResource;
+ 
+ /**
+- * A stocktake document (inventory_counts) — Phase 4G.1. Operational; no cost.
++ * A stocktake document (inventory_counts) ΓÇö Phase 4G.1. Operational; no cost.
+  */
+ class InventoryCountResource extends JsonResource
+ {
+diff --git a/Modules/Inventory/app/Models/InventoryCount.php b/Modules/Inventory/app/Models/InventoryCount.php
+index 5457ba5d3..8d3a4c729 100644
+--- a/Modules/Inventory/app/Models/InventoryCount.php
++++ b/Modules/Inventory/app/Models/InventoryCount.php
+@@ -2,23 +2,13 @@
+ 
+ namespace Modules\Inventory\Models;
+ 
+-use Illuminate\Database\Eloquent\Factories\HasFactory;
+ use Illuminate\Database\Eloquent\Model;
+ use Illuminate\Database\Eloquent\Relations\HasMany;
+ use Modules\Inventory\Models\Concerns\BelongsToInventoryTenant;
+ 
+-/**
+- * A physical inventory / cycle count / stocktake document (Phase 4D).
+- * States: draft → counting → submitted → approved → finalized (or cancelled).
+- * Finalization applies variance through InventoryStockService::adjust() exactly once.
+- */
+ class InventoryCount extends Model
+ {
+-    use BelongsToInventoryTenant, HasFactory;
+-
+-    protected $connection = 'central';
+-
+-    protected $table = 'inventory_counts';
++    use BelongsToInventoryTenant;
+ 
+     public const STATUS_DRAFT = 'draft';
+ 
+@@ -32,16 +22,28 @@ class InventoryCount extends Model
+ 
+     public const STATUS_CANCELLED = 'cancelled';
+ 
++    protected $connection = 'central';
++
++    protected $table = 'inventory_counts';
++
+     protected $fillable = [
+-        'tenant_id', 'reference', 'warehouse_id', 'warehouse_location_id', 'count_type',
+-        'status', 'snapshot_at', 'finalized_at', 'created_by_id', 'submitted_by_id',
+-        'approved_by_id', 'notes', 'metadata',
++        'tenant_id',
++        'reference',
++        'warehouse_id',
++        'warehouse_location_id',
++        'count_type',
++        'status',
++        'snapshot_at',
++        'finalized_at',
++        'created_by_id',
++        'submitted_by_id',
++        'approved_by_id',
++        'notes',
+     ];
+ 
+     protected $casts = [
+         'snapshot_at' => 'datetime',
+         'finalized_at' => 'datetime',
+-        'metadata' => 'array',
+     ];
+ 
+     public function lines(): HasMany
+diff --git a/Modules/Inventory/app/Models/InventoryCountLine.php b/Modules/Inventory/app/Models/InventoryCountLine.php
+index 008c798d2..bfd1abd56 100644
+--- a/Modules/Inventory/app/Models/InventoryCountLine.php
++++ b/Modules/Inventory/app/Models/InventoryCountLine.php
+@@ -12,7 +12,7 @@
+  * serial-tracked Good the operator records observed serial numbers, so a count
+  * compares identity SETS (missing vs unexpected) and cannot hide a swap behind an
+  * equal total. snapshot_quantity is preserved for audit; the applied variance is
+- * counted − CURRENT canonical on_hand at finalization.
++ * counted - CURRENT canonical on_hand at finalization.
+  */
+ class InventoryCountLine extends Model
+ {
+diff --git a/Modules/Inventory/app/Models/InventoryDocument.php b/Modules/Inventory/app/Models/InventoryDocument.php
+index 9bc20b78a..16e7edd1f 100644
+--- a/Modules/Inventory/app/Models/InventoryDocument.php
++++ b/Modules/Inventory/app/Models/InventoryDocument.php
+@@ -14,6 +14,8 @@ class InventoryDocument extends Model
+ {
+     use BelongsToInventoryTenant, HasDynamicApprovals, HasFactory;
+ 
++    protected $connection = 'central';
++
+     protected $table = 'inventory_documents';
+ 
+     protected $fillable = [
+diff --git a/Modules/Inventory/app/Models/InventoryDocumentAsset.php b/Modules/Inventory/app/Models/InventoryDocumentAsset.php
+index e645c2ff7..bdd36dd31 100644
+--- a/Modules/Inventory/app/Models/InventoryDocumentAsset.php
++++ b/Modules/Inventory/app/Models/InventoryDocumentAsset.php
+@@ -11,8 +11,19 @@ class InventoryDocumentAsset extends Model
+ {
+     use HasFactory;
+ 
++    /**
++     * Must share the central connection with InventoryDocument so document_id
++     * foreign keys resolve under tenant HTTP requests.
++     */
++    protected $connection = 'central';
++
+     protected $table = 'inventory_document_assets';
+ 
++    public function getConnectionName()
++    {
++        return 'central';
++    }
++
+     protected $fillable = [
+         'document_id',
+         'kind',
+diff --git a/Modules/Inventory/app/Models/InventoryDocumentItem.php b/Modules/Inventory/app/Models/InventoryDocumentItem.php
+index 2723d5786..11fc7b321 100644
+--- a/Modules/Inventory/app/Models/InventoryDocumentItem.php
++++ b/Modules/Inventory/app/Models/InventoryDocumentItem.php
+@@ -10,8 +10,20 @@ class InventoryDocumentItem extends Model
+ {
+     use HasFactory;
+ 
++    /**
++     * Parent InventoryDocument is central-scoped. Without an explicit central
++     * connection, tenancy would write items into the tenant DB and fail the
++     * document_id foreign key (document exists on central, not tenant).
++     */
++    protected $connection = 'central';
++
+     protected $table = 'inventory_document_items';
+ 
++    public function getConnectionName()
++    {
++        return 'central';
++    }
++
+     protected $fillable = [
+         'document_id',
+         'inventory_item_id',
+diff --git a/Modules/Inventory/app/Support/InventoryCountService.php b/Modules/Inventory/app/Support/InventoryCountService.php
+index 42c707a9b..24b30bbdf 100644
+--- a/Modules/Inventory/app/Support/InventoryCountService.php
++++ b/Modules/Inventory/app/Support/InventoryCountService.php
+@@ -54,6 +54,7 @@ public function generateLines(InventoryCount $count): InventoryCount
+         $rows = DB::connection('central')->table('warehouse_stocks as s')
+             ->join('warehouse_locations as l', 'l.id', '=', 's.warehouse_location_id')
+             ->where('s.tenant_id', $count->tenant_id)
++            ->whereNotNull('s.good_id')
+             ->when($count->warehouse_id, fn ($q) => $q->where('l.warehouse_id', $count->warehouse_id))
+             ->when($count->warehouse_location_id, fn ($q) => $q->where('s.warehouse_location_id', $count->warehouse_location_id))
+             ->get(['s.good_id', 's.warehouse_location_id', 's.good_batch_id', 's.batch_number', 's.on_hand']);
+diff --git a/Modules/Inventory/app/Support/InventoryDocumentWorkflowService.php b/Modules/Inventory/app/Support/InventoryDocumentWorkflowService.php
+index 4b054dd47..dc0eb3213 100644
+--- a/Modules/Inventory/app/Support/InventoryDocumentWorkflowService.php
++++ b/Modules/Inventory/app/Support/InventoryDocumentWorkflowService.php
+@@ -22,7 +22,9 @@ public function __construct(
+      */
+     public function createDocument(array $payload, array $items): InventoryDocument
+     {
+-        return DB::transaction(function () use ($payload, $items): InventoryDocument {
++        // Inventory documents live on central. A bare DB::transaction() would open
++        // on the tenant connection under tenancy and leave central writes non-atomic.
++        return DB::connection('central')->transaction(function () use ($payload, $items): InventoryDocument {
+             $type = (string) $payload['type'];
+             $document = InventoryDocument::query()->create([
+                 'type' => $type,
+@@ -62,7 +64,7 @@ public function createDocument(array $payload, array $items): InventoryDocument
+      */
+     public function updateDocument(InventoryDocument $document, array $payload, ?array $items = null): InventoryDocument
+     {
+-        return DB::transaction(function () use ($document, $payload, $items): InventoryDocument {
++        return DB::connection('central')->transaction(function () use ($document, $payload, $items): InventoryDocument {
+             $locked = InventoryDocument::query()->whereKey($document->id)->lockForUpdate()->firstOrFail();
+ 
+             $locked->update([
+@@ -98,7 +100,7 @@ public function transition(InventoryDocument $document, string $action, array $p
+             ]);
+         }
+ 
+-        return DB::transaction(function () use ($document, $action, $payload, $transition): InventoryDocument {
++        return DB::connection('central')->transaction(function () use ($document, $action, $payload, $transition): InventoryDocument {
+             $locked = InventoryDocument::query()
+                 ->with(['items.inventoryItem'])
+                 ->whereKey($document->id)
+diff --git a/Modules/Inventory/app/Support/InventoryEntityCatalog.php b/Modules/Inventory/app/Support/InventoryEntityCatalog.php
+index a73413837..ca238db6c 100644
+--- a/Modules/Inventory/app/Support/InventoryEntityCatalog.php
++++ b/Modules/Inventory/app/Support/InventoryEntityCatalog.php
+@@ -30,7 +30,29 @@ public static function entityTypeFor(string $resource): ?string
+ 
+     public static function routeRegex(): string
+     {
+-        $keys = array_keys(self::MAP);
++        return self::regexFor(array_keys(self::MAP));
++    }
++
++    /**
++     * Combined entity + workflow alias resource keys.
++     * Used by a single catch-all so the two catalogs cannot overwrite each other
++     * in Laravel's route collection (same method+URI replaces the prior route).
++     */
++    public static function combinedRouteRegex(): string
++    {
++        $keys = array_values(array_unique([
++            ...array_keys(self::MAP),
++            ...array_keys(InventoryWorkflowAliasCatalog::all()),
++        ]));
++
++        return self::regexFor($keys);
++    }
++
++    /**
++     * @param  list<string>  $keys
++     */
++    private static function regexFor(array $keys): string
++    {
+         $parts = array_map(
+             static fn (string $key): string => preg_quote($key, '#'),
+             $keys
+diff --git a/Modules/Inventory/database/migrations/2026_09_14_000023_add_adjustment_movement_id_to_count_lines.php b/Modules/Inventory/database/migrations/2026_09_14_000023_add_adjustment_movement_id_to_count_lines.php
+new file mode 100644
+index 000000000..5a6f55be7
+--- /dev/null
++++ b/Modules/Inventory/database/migrations/2026_09_14_000023_add_adjustment_movement_id_to_count_lines.php
+@@ -0,0 +1,31 @@
++<?php
++
++use Illuminate\Database\Migrations\Migration;
++use Illuminate\Database\Schema\Blueprint;
++use Illuminate\Support\Facades\Schema;
++
++/**
++ * Backfill adjustment_movement_id on inventory_count_lines for databases that
++ * already had the table before the create migration included this column.
++ * Finalization stores the stock-adjustment movement id for audit/traceability.
++ */
++return new class extends Migration
++{
++    public function up(): void
++    {
++        if (Schema::hasTable('inventory_count_lines') && ! Schema::hasColumn('inventory_count_lines', 'adjustment_movement_id')) {
++            Schema::table('inventory_count_lines', function (Blueprint $t): void {
++                $t->unsignedBigInteger('adjustment_movement_id')->nullable()->after('reason');
++            });
++        }
++    }
++
++    public function down(): void
++    {
++        if (Schema::hasTable('inventory_count_lines') && Schema::hasColumn('inventory_count_lines', 'adjustment_movement_id')) {
++            Schema::table('inventory_count_lines', function (Blueprint $t): void {
++                $t->dropColumn('adjustment_movement_id');
++            });
++        }
++    }
++};
+diff --git a/Modules/Inventory/routes/api.php b/Modules/Inventory/routes/api.php
+index fa6128511..9f118b978 100644
+--- a/Modules/Inventory/routes/api.php
++++ b/Modules/Inventory/routes/api.php
+@@ -252,6 +252,9 @@
+         Route::get('items/next-sku', [InventoryItemController::class, 'nextSku'])
+             ->middleware('permission:view_inventory|manage_inventory,sanctum')
+             ->name('items.next-sku');
++        Route::get('items/export', [InventoryExportController::class, 'items'])
++            ->middleware('permission:view_inventory|manage_inventory,sanctum')
++            ->name('items.export');
+         Route::get('items', [InventoryItemController::class, 'index'])
+             ->middleware('permission:view_inventory|manage_inventory,sanctum')
+             ->name('items.index');
+@@ -480,35 +483,65 @@
+             Route::match(['put', 'patch'], 'product-batches/{id}', fn (Request $request, $id) => app(InventoryEntityRecordController::class)->update($request, 'product-batches', $id));
+             Route::delete('product-batches/{id}', fn ($id) => app(InventoryEntityRecordController::class)->destroy('product-batches', $id));
+         });
+-        Route::get('{resource}', [InventoryEntityRecordController::class, 'index'])
+-            ->where('resource', InventoryEntityCatalog::routeRegex())
+-            ->middleware('permission:view_inventory|manage_inventory,sanctum')
+-            ->name('entity.index');
++
++        // Single catch-all for entity catalog + workflow aliases.
++        // Laravel keys routes by method+URI (not where()), so two `{resource}` groups
++        $combinedResource = InventoryEntityCatalog::combinedRouteRegex();
++
+         Route::get('{resource}/export', [InventoryExportController::class, 'entities'])
+             ->where('resource', InventoryEntityCatalog::routeRegex())
+             ->middleware('permission:view_inventory|manage_inventory,sanctum')
+             ->name('entity.export');
+-        Route::post('{resource}', [InventoryEntityRecordController::class, 'store'])
+-            ->where('resource', InventoryEntityCatalog::routeRegex())
++
++        Route::get('{resource}', function (Request $request, string $resource) {
++            if (InventoryEntityCatalog::entityTypeFor($resource) !== null) {
++                return app(InventoryEntityRecordController::class)->index($request, $resource);
++            }
++
++            return app(InventoryWorkflowAliasController::class)->index($request, $resource);
++        })
++            ->where('resource', $combinedResource)
++            ->middleware('permission:view_inventory|manage_inventory,sanctum')
++            ->name('resource.index');
++
++        Route::post('{resource}', function (Request $request, string $resource) {
++            if (InventoryEntityCatalog::entityTypeFor($resource) !== null) {
++                return app(InventoryEntityRecordController::class)->store($request, $resource);
++            }
++
++            return app(InventoryWorkflowAliasController::class)->store($request, $resource);
++        })
++            ->where('resource', $combinedResource)
+             ->middleware('permission:manage_inventory,sanctum')
+-            ->name('entity.store');
+-        Route::get('{resource}/{id}', [InventoryEntityRecordController::class, 'show'])
+-            ->where('resource', InventoryEntityCatalog::routeRegex())
++            ->name('resource.store');
++
++        Route::get('{resource}/{id}', function (Request $request, string $resource, $id) {
++            if (InventoryEntityCatalog::entityTypeFor($resource) !== null) {
++                return app(InventoryEntityRecordController::class)->show($resource, $id);
++            }
++
++            return app(InventoryWorkflowAliasController::class)->show($resource, $id);
++        })
++            ->where('resource', $combinedResource)
+             ->middleware('permission:view_inventory|manage_inventory,sanctum')
+-            ->name('entity.show');
+-        Route::match(['put', 'patch'], '{resource}/{id}', [InventoryEntityRecordController::class, 'update'])
+-            ->where('resource', InventoryEntityCatalog::routeRegex())
++            ->name('resource.show');
++
++        Route::match(['put', 'patch'], '{resource}/{id}', function (Request $request, string $resource, $id) {
++            if (InventoryEntityCatalog::entityTypeFor($resource) !== null) {
++                return app(InventoryEntityRecordController::class)->update($request, $resource, $id);
++            }
++
++            return app(InventoryWorkflowAliasController::class)->update($request, $resource, $id);
++        })
++            ->where('resource', $combinedResource)
+             ->middleware('permission:manage_inventory,sanctum')
+-            ->name('entity.update');
++            ->name('resource.update');
++
+         Route::delete('{resource}/{id}', [InventoryEntityRecordController::class, 'destroy'])
+             ->where('resource', InventoryEntityCatalog::routeRegex())
+             ->middleware('permission:manage_inventory,sanctum')
+             ->name('entity.destroy');
+-        Route::post('goods/{id}/suppliers', [InventoryEntityRecordController::class, 'attachRelation'])
+-            ->defaults('resource', 'goods')
+-            ->defaults('relation', 'suppliers')
+-            ->middleware('permission:manage_inventory,sanctum')
+-            ->name('goods.suppliers');
++
+         Route::post('routes/{id}/delivery-notes', [InventoryEntityRecordController::class, 'attachRelation'])
+             ->defaults('resource', 'routes')
+             ->defaults('relation', 'delivery_notes')
+@@ -529,22 +562,6 @@
+             ->middleware('permission:manage_inventory,sanctum')
+             ->name('entity.logs.store');
+ 
+-        Route::get('{resource}', [InventoryWorkflowAliasController::class, 'index'])
+-            ->where('resource', InventoryWorkflowAliasCatalog::routeRegex())
+-            ->middleware('permission:view_inventory|manage_inventory,sanctum')
+-            ->name('workflow.index');
+-        Route::post('{resource}', [InventoryWorkflowAliasController::class, 'store'])
+-            ->where('resource', InventoryWorkflowAliasCatalog::routeRegex())
+-            ->middleware('permission:manage_inventory,sanctum')
+-            ->name('workflow.store');
+-        Route::get('{resource}/{id}', [InventoryWorkflowAliasController::class, 'show'])
+-            ->where('resource', InventoryWorkflowAliasCatalog::routeRegex())
+-            ->middleware('permission:view_inventory|manage_inventory,sanctum')
+-            ->name('workflow.show');
+-        Route::match(['put', 'patch'], '{resource}/{id}', [InventoryWorkflowAliasController::class, 'update'])
+-            ->where('resource', InventoryWorkflowAliasCatalog::routeRegex())
+-            ->middleware('permission:manage_inventory,sanctum')
+-            ->name('workflow.update');
+         Route::post('{resource}/{id}/{action}', [InventoryWorkflowAliasController::class, 'action'])
+             ->where('resource', InventoryWorkflowAliasCatalog::routeRegex())
+             ->middleware('permission:manage_inventory,sanctum')
+diff --git a/Modules/LandingTemplates/database/seeders/LandingTemplateSeeder.php b/Modules/LandingTemplates/database/seeders/LandingTemplateSeeder.php
+index 6d6a50d5d..b823881f0 100644
+--- a/Modules/LandingTemplates/database/seeders/LandingTemplateSeeder.php
++++ b/Modules/LandingTemplates/database/seeders/LandingTemplateSeeder.php
+@@ -13,7 +13,6 @@
+ use Spatie\Permission\PermissionRegistrar;
+ use Spatie\Permission\Models\Permission;
+ use Spatie\Permission\Models\Role;
+-
+ /**
+  * Idempotent seeder for the master template library.
+  *
+diff --git a/Modules/ProcurementManagement/app/Http/Controllers/ProcurementOperationsController.php b/Modules/ProcurementManagement/app/Http/Controllers/ProcurementOperationsController.php
+index 6a0be3e1a..d03daddf2 100644
+--- a/Modules/ProcurementManagement/app/Http/Controllers/ProcurementOperationsController.php
++++ b/Modules/ProcurementManagement/app/Http/Controllers/ProcurementOperationsController.php
+@@ -17,6 +17,8 @@
+ use Modules\ProcurementManagement\Models\SupplierBid;
+ use Modules\ProcurementManagement\Models\SupplierInvoice;
+ use Modules\ProcurementManagement\Models\SupplierProfile;
++use Modules\Inventory\Models\InventoryItem;
++use Modules\Inventory\Support\CanonicalReceiptResolver;
+ use Modules\ProcurementManagement\Services\ProcurementAuditService;
+ use Modules\ProcurementManagement\Services\ProcurementIntegrationService;
+ use Modules\ProcurementManagement\Services\ProcurementLifecycleService;
+@@ -32,6 +34,7 @@ public function __construct(
+         private readonly ProcurementAuditService $audit,
+         private readonly ProcurementLifecycleService $lifecycle,
+         private readonly ProcurementIntegrationService $integrations,
++        private readonly CanonicalReceiptResolver $receiptResolver,
+     ) {}
+ 
+     public function requisitions(Request $request): JsonResponse
+@@ -254,14 +257,14 @@ public function storeReceipt(Request $request): JsonResponse
+             'items.*.unit_price' => ['nullable', 'numeric', 'min:0'], 'items.*.lot_number' => ['nullable', 'string', 'max:120'],
+             'items.*.batch_number' => ['nullable', 'string', 'max:120'], 'items.*.serial_numbers' => ['nullable', 'array'],
+             'items.*.expiry_date' => ['nullable', 'date'],
+-            // Canonical stock destination (Phase 3D.1). Nullable at draft/create;
+-            // posting (Phase 3D.2) requires it for inventory-tracked lines. When
+-            // present it must be a warehouse location owned by the current tenant.
++            // Required whenever an inventory item is linked so stock posting cannot
++            // fail later for a missing destination bin.
+             'items.*.warehouse_location_id' => ['nullable', 'integer', Rule::exists('central.warehouse_locations', 'id')->where(fn ($query) => $query->where('tenant_id', ProcurementTenantContext::id()))],
+             'attachments' => ['nullable', 'array'],
+         ]);
+         $order = PurchaseOrder::query()->findOrFail($validated['purchase_order_id']);
+         $this->lifecycle->validateReceiptItems($order, $validated['items']);
++        $this->assertReceivableStockLines($validated['items']);
+         $receipt = GoodsReceipt::query()->create($validated + [
+             'number' => $this->numbers->next('GRN', GoodsReceipt::class), 'received_at' => now(),
+             'received_by' => $request->user()?->id, 'status' => 'received',
+@@ -288,6 +291,13 @@ public function postReceipt(Request $request, GoodsReceipt $goodsReceipt): JsonR
+         return response()->json(['data' => $this->integrations->postReceipt($goodsReceipt, $request->user()?->id)]);
+     }
+ 
++    public function cancelReceipt(Request $request, GoodsReceipt $goodsReceipt): JsonResponse
++    {
++        return response()->json([
++            'data' => $this->lifecycle->cancelReceipt($goodsReceipt, $request->user()?->id),
++        ]);
++    }
++
+     public function invoices(Request $request): JsonResponse
+     {
+         $query = SupplierInvoice::query()
+@@ -424,7 +434,7 @@ private function purchaseOrderValidated(Request $request, bool $partial = false)
+     {
+         $required = $partial ? 'sometimes' : 'required';
+ 
+-        return $request->validate([
++        $validated = $request->validate([
+             'supplier_id' => [$required, 'integer', Rule::exists('central.suppliers', 'id')->where(fn ($query) => $query->where('tenant_id', ProcurementTenantContext::id()))], 'requisition_id' => ['nullable', 'integer', Rule::exists('central.procurement_requisitions', 'id')->where(fn ($query) => $query->where('tenant_id', ProcurementTenantContext::id()))],
+             'agreement_id' => ['nullable', 'integer', Rule::exists('central.procurement_agreements', 'id')->where(fn ($query) => $query->where('tenant_id', ProcurementTenantContext::id()))], 'project_id' => ['nullable', 'integer'], 'cost_center_id' => ['nullable', 'integer'],
+             'currency' => ['sometimes', 'string', 'size:3'], 'exchange_rate' => ['sometimes', 'numeric', 'gt:0'], 'items' => [$required, 'array', 'min:1'],
+@@ -436,6 +446,72 @@ private function purchaseOrderValidated(Request $request, bool $partial = false)
+             'over_receipt_tolerance_percent' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+             'replenishment_call_off' => ['sometimes', 'boolean'],
+         ]);
++
++        if (isset($validated['items'])) {
++            $this->assertMappedInventoryItems($validated['items']);
++        }
++
++        return $validated;
++    }
++
++    /**
++     * Fail early when inventory-tracked lines cannot post stock (unmapped item
++     * or missing warehouse location). Mirrors CanonicalReceiptResolver rules.
++     *
++     * @param  list<array<string, mixed>>  $items
++     */
++    private function assertReceivableStockLines(array $items): void
++    {
++        foreach ($items as $index => $line) {
++            if (empty($line['inventory_item_id'])) {
++                continue;
++            }
++
++            try {
++                $this->receiptResolver->resolveLine([
++                    ...$line,
++                    'accepted_quantity' => $line['accepted_quantity'] ?? $line['received_quantity'] ?? 0,
++                    'track_inventory' => true,
++                ]);
++            } catch (ValidationException $exception) {
++                $messages = [];
++                foreach ($exception->errors() as $field => $fieldMessages) {
++                    $messages["items.{$index}.{$field}"] = $fieldMessages;
++                }
++
++                throw ValidationException::withMessages($messages);
++            }
++        }
++    }
++
++    /**
++     * @param  list<array<string, mixed>>  $items
++     */
++    private function assertMappedInventoryItems(array $items): void
++    {
++        foreach ($items as $index => $line) {
++            $itemId = $line['inventory_item_id'] ?? null;
++            if (! $itemId) {
++                continue;
++            }
++
++            $item = InventoryItem::query()->find((int) $itemId);
++            if (! $item) {
++                throw ValidationException::withMessages([
++                    "items.{$index}.inventory_item_id" => ['Inventory item not found for this tenant.'],
++                ]);
++            }
++
++            try {
++                $this->receiptResolver->resolveGoodId($item);
++            } catch (ValidationException $exception) {
++                throw ValidationException::withMessages([
++                    "items.{$index}.inventory_item_id" => [
++                        "Inventory item #{$item->id} is not mapped to a canonical Good. Link a Good in Inventory before using it on purchase orders or receipts.",
++                    ],
++                ]);
++            }
++        }
+     }
+ 
+     private function invoiceValidated(Request $request, bool $partial = false): array
+diff --git a/Modules/ProcurementManagement/app/Http/Controllers/ProcurementReferenceController.php b/Modules/ProcurementManagement/app/Http/Controllers/ProcurementReferenceController.php
+index 149d75b22..be27255bb 100644
+--- a/Modules/ProcurementManagement/app/Http/Controllers/ProcurementReferenceController.php
++++ b/Modules/ProcurementManagement/app/Http/Controllers/ProcurementReferenceController.php
+@@ -26,6 +26,7 @@ public function __invoke(): JsonResponse
+ 
+             'inventory_items' => InventoryItem::query()
+                 ->where('is_active', true)
++                ->whereNotNull('good_id')
+                 ->orderBy('name')
+                 ->with('good:id,track_batches,track_expiry,track_serials')
+                 ->get(['id', 'sku', 'name', 'unit', 'current_stock', 'cost_price', 'good_id'])
+@@ -36,6 +37,8 @@ public function __invoke(): JsonResponse
+                     'unit' => $item->unit,
+                     'current_stock' => $item->current_stock,
+                     'cost_price' => $item->cost_price,
++                    'good_id' => (int) $item->good_id,
++                    'is_receivable' => true,
+                     'track_batches' => (bool) ($item->good?->track_batches ?? false),
+                     'track_expiry' => (bool) ($item->good?->track_expiry ?? false),
+                     'track_serials' => (bool) ($item->good?->track_serials ?? false),
+@@ -87,6 +90,34 @@ public function __invoke(): JsonResponse
+                     ->get(['id', 'code', 'name', 'is_active'])
+                 : [],
+ 
++            'departments' => Schema::connection('central')->hasTable('hr_reference_values')
++                ? $connection->table('hr_reference_values')
++                    ->where('tenant_id', ProcurementTenantContext::id())
++                    ->where('catalog', 'departments')
++                    ->whereNull('deleted_at')
++                    ->where('is_active', true)
++                    ->orderBy('sort_order')
++                    ->orderBy('id')
++                    ->limit(500)
++                    ->get(['id', 'code', 'name'])
++                    ->map(function ($row): array {
++                        $name = is_string($row->name) ? json_decode($row->name, true) : $row->name;
++                        if (is_array($name)) {
++                            $first = reset($name);
++                            $label = (string) ($name['en'] ?? $name['am'] ?? (is_string($first) ? $first : $row->code));
++                        } else {
++                            $label = (string) ($name ?: $row->code);
++                        }
++
++                        return [
++                            'id' => (int) $row->id,
++                            'code' => (string) $row->code,
++                            'name' => $label !== '' ? $label : (string) $row->code,
++                        ];
++                    })
++                    ->values()
++                : [],
++
+             'methods' => [
+                 ['value' => 'request_for_quotation', 'label' => 'Request for quotation'],
+                 ['value' => 'open_tender', 'label' => 'Open tender'],
+diff --git a/Modules/ProcurementManagement/app/Services/ProcurementIntegrationService.php b/Modules/ProcurementManagement/app/Services/ProcurementIntegrationService.php
+index c4f375cf6..21b3e2817 100644
+--- a/Modules/ProcurementManagement/app/Services/ProcurementIntegrationService.php
++++ b/Modules/ProcurementManagement/app/Services/ProcurementIntegrationService.php
+@@ -33,6 +33,9 @@ public function postReceipt(GoodsReceipt $receipt, ?int $userId): GoodsReceipt
+         if ($receipt->stock_posted_at) {
+             return $receipt;
+         }
++        if ($receipt->status === 'cancelled') {
++            throw ValidationException::withMessages(['status' => 'Cancelled receipts cannot be posted to stock.']);
++        }
+         if (! in_array($receipt->inspection_status, ['passed', 'accepted_with_exception'], true)) {
+             throw ValidationException::withMessages(['inspection_status' => 'Pass or explicitly accept the inspection before posting stock.']);
+         }
+diff --git a/Modules/ProcurementManagement/app/Services/ProcurementLifecycleService.php b/Modules/ProcurementManagement/app/Services/ProcurementLifecycleService.php
+index 47ae45ace..02c43bc6a 100644
+--- a/Modules/ProcurementManagement/app/Services/ProcurementLifecycleService.php
++++ b/Modules/ProcurementManagement/app/Services/ProcurementLifecycleService.php
+@@ -130,6 +130,9 @@ public function inspectReceipt(GoodsReceipt $receipt, array $payload, ?int $user
+         if ($receipt->stock_posted_at) {
+             throw ValidationException::withMessages(['status' => 'Posted receipts cannot be re-inspected.']);
+         }
++        if ($receipt->status === 'cancelled') {
++            throw ValidationException::withMessages(['status' => 'Cancelled receipts cannot be inspected.']);
++        }
+         $before = $receipt->toArray();
+         $receipt->update([
+             'inspection_method' => $payload['inspection_method'], 'inspection_status' => $payload['inspection_status'],
+@@ -144,6 +147,35 @@ public function inspectReceipt(GoodsReceipt $receipt, array $payload, ?int $user
+         return $receipt->fresh('purchaseOrder.supplier');
+     }
+ 
++    /**
++     * Void an unposted goods receipt so its quantity no longer reserves PO open quantity.
++     * Hard delete is intentionally not supported — cancelled rows remain for audit.
++     */
++    public function cancelReceipt(GoodsReceipt $receipt, ?int $userId): GoodsReceipt
++    {
++        if ($receipt->stock_posted_at) {
++            throw ValidationException::withMessages([
++                'status' => 'Posted receipts cannot be cancelled. Reverse stock through Inventory if a correction is required.',
++            ]);
++        }
++        if ($receipt->status === 'cancelled') {
++            throw ValidationException::withMessages(['status' => 'This receipt is already cancelled.']);
++        }
++
++        $before = $receipt->toArray();
++        $receipt->update([
++            'status' => 'cancelled',
++            'inspection_status' => $receipt->inspection_status === 'pending'
++                ? 'cancelled'
++                : $receipt->inspection_status,
++        ]);
++        $this->audit->record($receipt, 'cancelled', $before, $receipt->fresh()->toArray(), [
++            'cancelled_by' => $userId,
++        ]);
++
++        return $receipt->fresh('purchaseOrder.supplier');
++    }
++
+     public function validateReceiptItems(PurchaseOrder $order, array $items): void
+     {
+         if (! in_array($order->status, ['issued', 'confirmed', 'partially_received'], true)) {
+@@ -173,8 +205,12 @@ public function validateReceiptItems(PurchaseOrder $order, array $items): void
+             if ($order->allow_over_receipt) {
+                 $limit *= 1 + ((float) $order->over_receipt_tolerance_percent / 100);
+             }
+-            if ($quantity <= 0 || ((float) ($previous[$key] ?? 0) + $quantity) > $limit + 0.0005) {
+-                throw ValidationException::withMessages(["items.{$index}.received_quantity" => 'Receipt quantity exceeds the remaining authorized quantity.']);
++            $alreadyReceived = (float) ($previous[$key] ?? 0);
++            $remaining = max(0, $limit - $alreadyReceived);
++            if ($quantity <= 0 || ($alreadyReceived + $quantity) > $limit + 0.0005) {
++                throw ValidationException::withMessages([
++                    "items.{$index}.received_quantity" => "Receipt quantity exceeds the remaining authorized quantity ({$remaining} left on this line). Cancel an unposted receipt or lower the quantity.",
++                ]);
+             }
+         }
+     }
+diff --git a/Modules/ProcurementManagement/routes/api.php b/Modules/ProcurementManagement/routes/api.php
+index e0958affc..52a8efcc9 100644
+--- a/Modules/ProcurementManagement/routes/api.php
++++ b/Modules/ProcurementManagement/routes/api.php
+@@ -39,6 +39,7 @@
+         Route::post('goods-receipts', [ProcurementOperationsController::class, 'storeReceipt'])->middleware('permission:receive_procurement_goods|manage_procurement,sanctum')->name('receipts.store');
+         Route::post('goods-receipts/{goodsReceipt}/inspect', [ProcurementOperationsController::class, 'inspectReceipt'])->middleware('permission:inspect_procurement_goods|manage_procurement,sanctum')->name('receipts.inspect');
+         Route::post('goods-receipts/{goodsReceipt}/post', [ProcurementOperationsController::class, 'postReceipt'])->middleware('permission:receive_procurement_goods|manage_procurement,sanctum')->name('receipts.post');
++        Route::post('goods-receipts/{goodsReceipt}/cancel', [ProcurementOperationsController::class, 'cancelReceipt'])->middleware('permission:receive_procurement_goods|manage_procurement,sanctum')->name('receipts.cancel');
+ 
+         Route::get('supplier-invoices', [ProcurementOperationsController::class, 'invoices'])->middleware('permission:view_procurement|manage_supplier_invoices|approve_supplier_invoices|manage_procurement,sanctum')->name('invoices.index');
+         Route::post('supplier-invoices', [ProcurementOperationsController::class, 'storeInvoice'])->middleware('permission:manage_supplier_invoices|manage_procurement,sanctum')->name('invoices.store');
+diff --git a/Modules/Production/app/Http/Controllers/ProductionBomController.php b/Modules/Production/app/Http/Controllers/ProductionBomController.php
+index a84a8439b..ab5f2f462 100644
+--- a/Modules/Production/app/Http/Controllers/ProductionBomController.php
++++ b/Modules/Production/app/Http/Controllers/ProductionBomController.php
+@@ -7,6 +7,7 @@
+ use Illuminate\Http\Request;
+ use Illuminate\Support\Facades\DB;
+ use Illuminate\Validation\Rule;
++use Modules\Inventory\Models\Product;
+ use Modules\Production\Models\ProductionBom;
+ use Modules\Production\Models\ProductionBomItem;
+ use Modules\Production\Support\ProductionTenantContext;
+@@ -172,7 +173,12 @@ private function syncItems(ProductionBom $bom, array $items): void
+     private function validatePayload(Request $request, ?int $id = null): array
+     {
+         return $request->validate([
+-            'product_id' => [$id ? 'sometimes' : 'required', 'integer'],
++            'product_id' => [
++                $id ? 'sometimes' : 'required',
++                'integer',
++                Rule::exists(Product::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'name' => [$id ? 'sometimes' : 'required', 'string', 'max:255'],
+             'code' => [
+                 $id ? 'sometimes' : 'required', 'string', 'max:60',
+@@ -191,7 +197,12 @@ private function validatePayload(Request $request, ?int $id = null): array
+             'notes' => ['sometimes', 'nullable', 'string', 'max:2000'],
+ 
+             'items' => ['sometimes', 'array'],
+-            'items.*.component_product_id' => ['required', 'integer'],
++            'items.*.component_product_id' => [
++                'required',
++                'integer',
++                Rule::exists(Product::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'items.*.component_type' => ['sometimes', Rule::in(self::COMPONENT_TYPES)],
+             'items.*.quantity_per_unit' => ['required', 'numeric', 'min:0'],
+             'items.*.uom' => ['sometimes', 'string', 'max:20'],
+diff --git a/Modules/Production/app/Http/Controllers/ProductionContainerController.php b/Modules/Production/app/Http/Controllers/ProductionContainerController.php
+index ce0d91059..de0e952b5 100644
+--- a/Modules/Production/app/Http/Controllers/ProductionContainerController.php
++++ b/Modules/Production/app/Http/Controllers/ProductionContainerController.php
+@@ -6,9 +6,11 @@
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Validation\Rule;
++use Modules\Inventory\Models\Product;
+ use Modules\Production\Models\ProductionContainerBalance;
+ use Modules\Production\Models\ProductionContainerMovement;
+ use Modules\Production\Models\ProductionContainerType;
++use Modules\Production\Models\ProductionOrder;
+ use Modules\Production\Services\ContainerDepositService;
+ use Modules\Production\Support\ProductionTenantContext;
+ use RuntimeException;
+@@ -117,9 +119,19 @@ public function indexMovements(Request $request): JsonResponse
+     public function storeMovement(Request $request): JsonResponse
+     {
+         $validated = $request->validate([
+-            'container_type_id' => ['required', 'integer', 'exists:production_container_types,id'],
++            'container_type_id' => [
++                'required',
++                'integer',
++                Rule::exists(ProductionContainerType::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'customer_contact_id' => ['nullable', 'integer'],
+-            'production_order_id' => ['nullable', 'integer', 'exists:production_orders,id'],
++            'production_order_id' => [
++                'nullable',
++                'integer',
++                Rule::exists(ProductionOrder::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'movement_type' => ['required', Rule::in(ProductionContainerMovement::TYPES)],
+             'quantity' => ['required', 'numeric'],
+             'deposit_per_unit' => ['nullable', 'numeric', 'min:0'],
+@@ -205,7 +217,13 @@ private function validateType(Request $request, ?int $id = null): array
+             ],
+             'capacity_litres' => ['sometimes', 'numeric', 'min:0.1'],
+             'deposit_amount' => ['sometimes', 'numeric', 'min:0'],
+-            'product_id' => ['sometimes', 'nullable', 'integer'],
++            'product_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists(Product::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'expected_trips' => ['sometimes', 'nullable', 'integer', 'min:1'],
+             'is_active' => ['sometimes', 'boolean'],
+             'notes' => ['sometimes', 'nullable', 'string', 'max:2000'],
+diff --git a/Modules/Production/app/Http/Controllers/ProductionDowntimeController.php b/Modules/Production/app/Http/Controllers/ProductionDowntimeController.php
+index 783b86703..e11977ca3 100644
+--- a/Modules/Production/app/Http/Controllers/ProductionDowntimeController.php
++++ b/Modules/Production/app/Http/Controllers/ProductionDowntimeController.php
+@@ -8,9 +8,11 @@
+ use Illuminate\Support\Carbon;
+ use Illuminate\Validation\Rule;
+ use Modules\Production\Models\ProductionDowntimeEvent;
++use Modules\Production\Models\ProductionLine;
+ use Modules\Production\Models\ProductionRun;
+ use Modules\Production\Services\ProductionMetricsService;
+ use Modules\Production\Support\DowntimeReasonCatalog;
++use Modules\Production\Support\ProductionTenantContext;
+ 
+ class ProductionDowntimeController extends Controller
+ {
+@@ -174,8 +176,20 @@ private function refreshRunOutage(ProductionRun $run): void
+     private function validatePayload(Request $request, ?int $id = null): array
+     {
+         return $request->validate([
+-            'production_run_id' => ['sometimes', 'nullable', 'integer', 'exists:production_runs,id'],
+-            'production_line_id' => ['sometimes', 'nullable', 'integer'],
++            'production_run_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists(ProductionRun::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
++            'production_line_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists(ProductionLine::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'reason_code' => [$id ? 'sometimes' : 'required', Rule::in(DowntimeReasonCatalog::codes())],
+             'started_at' => [$id ? 'sometimes' : 'required', 'date'],
+             'ended_at' => ['sometimes', 'nullable', 'date', 'after_or_equal:started_at'],
+diff --git a/Modules/Production/app/Http/Controllers/ProductionOrderController.php b/Modules/Production/app/Http/Controllers/ProductionOrderController.php
+index aa463fc07..3d6d527f9 100644
+--- a/Modules/Production/app/Http/Controllers/ProductionOrderController.php
++++ b/Modules/Production/app/Http/Controllers/ProductionOrderController.php
+@@ -6,8 +6,11 @@
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Validation\Rule;
++use Modules\Inventory\Models\Product;
++use Modules\Production\Models\ProductionBom;
+ use Modules\Production\Models\ProductionOrder;
+ use Modules\Production\Services\ProductionOrderService;
++use Modules\Production\Support\ProductionTenantContext;
+ use RuntimeException;
+ use Symfony\Component\HttpFoundation\StreamedResponse;
+ 
+@@ -71,13 +74,40 @@ public function show(int $id): JsonResponse
+             ])
+             ->findOrFail($id);
+ 
++        // Older / incomplete orders may lack an exploded material plan.
++        // Resolve an active BOM (by id or product) and rebuild consumptions so
++        // Issue Material can offer planned components.
++        if ($order->consumptions->isEmpty()) {
++            $bom = $order->bom;
++            if (! $bom && $order->product_id) {
++                $bom = ProductionBom::query()
++                    ->active()
++                    ->where('product_id', $order->product_id)
++                    ->latest('version')
++                    ->first();
++                if ($bom) {
++                    $order->forceFill(['bom_id' => $bom->id])->save();
++                }
++            }
++
++            if ($bom) {
++                $this->orders->planMaterials($order->fresh(), $bom);
++                $order->refresh()->load(['consumptions.component', 'bom.items.component']);
++            }
++        }
++
+         return response()->json(['status' => 'success', 'data' => $order]);
+     }
+ 
+     public function store(Request $request): JsonResponse
+     {
+         $validated = $request->validate([
+-            'product_id' => ['required', 'integer'],
++            'product_id' => [
++                'required',
++                'integer',
++                Rule::exists(Product::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'bom_id' => ['nullable', 'integer'],
+             'production_line_id' => ['nullable', 'integer'],
+             'planned_quantity' => ['required', 'numeric', 'min:0.0001'],
+@@ -161,17 +191,46 @@ public function transition(Request $request, int $id): JsonResponse
+ 
+     public function issueMaterial(Request $request, int $id): JsonResponse
+     {
+-        $order = ProductionOrder::query()->findOrFail($id);
++        $order = ProductionOrder::query()->with(['bom.items', 'consumptions'])->findOrFail($id);
++
++        if ($order->consumptions->isEmpty()) {
++            $bom = $order->bom;
++            if (! $bom && $order->product_id) {
++                $bom = ProductionBom::query()
++                    ->active()
++                    ->where('product_id', $order->product_id)
++                    ->latest('version')
++                    ->first();
++                if ($bom) {
++                    $order->forceFill(['bom_id' => $bom->id])->save();
++                }
++            }
++            if ($bom) {
++                $this->orders->planMaterials($order->fresh(), $bom);
++                $order->refresh();
++            }
++        }
+ 
+         $validated = $request->validate([
+-            'component_product_id' => ['required', 'integer'],
++            'component_product_id' => [
++                'required',
++                'integer',
++                Rule::exists(Product::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'component_type' => ['sometimes', 'string', 'max:40'],
+             'actual_quantity' => ['required', 'numeric', 'min:0.000001'],
+             'planned_quantity' => ['sometimes', 'numeric', 'min:0'],
+             'uom' => ['sometimes', 'string', 'max:20'],
+             'unit_cost' => ['sometimes', 'nullable', 'numeric', 'min:0'],
+             'supplier_batch_number' => ['sometimes', 'nullable', 'string', 'max:100'],
+-            'from_location_id' => ['sometimes', 'nullable', 'integer', 'exists:warehouse_locations,id'],
++            'from_location_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists('central.warehouse_locations', 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'notes' => ['sometimes', 'nullable', 'string', 'max:1000'],
+         ]);
+ 
+diff --git a/Modules/Production/app/Http/Controllers/ProductionRunController.php b/Modules/Production/app/Http/Controllers/ProductionRunController.php
+index f69b5ac4a..e82f2b66e 100644
+--- a/Modules/Production/app/Http/Controllers/ProductionRunController.php
++++ b/Modules/Production/app/Http/Controllers/ProductionRunController.php
+@@ -6,10 +6,12 @@
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Validation\Rule;
++use Modules\Production\Models\ProductionLine;
+ use Modules\Production\Models\ProductionOrder;
+ use Modules\Production\Models\ProductionRun;
+ use Modules\Production\Services\ProductionMetricsService;
+ use Modules\Production\Services\ProductionOrderService;
++use Modules\Production\Support\ProductionTenantContext;
+ 
+ class ProductionRunController extends Controller
+ {
+@@ -148,8 +150,21 @@ public function destroy(int $id): JsonResponse
+     private function validatePayload(Request $request, ?int $id = null): array
+     {
+         return $request->validate([
+-            'production_order_id' => [$id ? 'sometimes' : 'required', 'integer', 'exists:production_orders,id'],
+-            'production_line_id' => ['sometimes', 'nullable', 'integer'],
++            // Model-based exists so the rule hits the central connection
++            // production_orders actually live on (tenant default DB has no copy).
++            'production_order_id' => [
++                $id ? 'sometimes' : 'required',
++                'integer',
++                Rule::exists(ProductionOrder::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
++            'production_line_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists(ProductionLine::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'shift' => ['sometimes', Rule::in(['day', 'night', 'a', 'b', 'c'])],
+             'supervisor_id' => ['sometimes', 'nullable', 'integer'],
+             'started_at' => [$id ? 'sometimes' : 'required', 'date'],
+diff --git a/Modules/Production/app/Http/Controllers/ProductionSanitationController.php b/Modules/Production/app/Http/Controllers/ProductionSanitationController.php
+index 1713528ac..534d262b0 100644
+--- a/Modules/Production/app/Http/Controllers/ProductionSanitationController.php
++++ b/Modules/Production/app/Http/Controllers/ProductionSanitationController.php
+@@ -6,7 +6,10 @@
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Validation\Rule;
++use Modules\Production\Models\ProductionLine;
++use Modules\Production\Models\ProductionOrder;
+ use Modules\Production\Models\ProductionSanitationLog;
++use Modules\Production\Support\ProductionTenantContext;
+ 
+ class ProductionSanitationController extends Controller
+ {
+@@ -128,8 +131,20 @@ public function destroy(int $id): JsonResponse
+     private function validatePayload(Request $request, ?int $id = null): array
+     {
+         return $request->validate([
+-            'production_line_id' => ['sometimes', 'nullable', 'integer'],
+-            'production_order_id' => ['sometimes', 'nullable', 'integer', 'exists:production_orders,id'],
++            'production_line_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists(ProductionLine::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
++            'production_order_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists(ProductionOrder::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'cip_type' => ['sometimes', Rule::in([
+                 'pre_rinse', 'caustic', 'acid', 'sanitize', 'full_cip', 'filler_bowl', 'tank',
+             ])],
+diff --git a/Modules/Production/app/Http/Controllers/ProductionWaterTreatmentController.php b/Modules/Production/app/Http/Controllers/ProductionWaterTreatmentController.php
+index 8f0d61ef7..92e50ff25 100644
+--- a/Modules/Production/app/Http/Controllers/ProductionWaterTreatmentController.php
++++ b/Modules/Production/app/Http/Controllers/ProductionWaterTreatmentController.php
+@@ -6,7 +6,10 @@
+ use Illuminate\Http\JsonResponse;
+ use Illuminate\Http\Request;
+ use Illuminate\Validation\Rule;
++use Modules\Production\Models\ProductionLine;
++use Modules\Production\Models\ProductionOrder;
+ use Modules\Production\Models\ProductionWaterTreatmentLog;
++use Modules\Production\Support\ProductionTenantContext;
+ use Modules\Production\Support\WaterTreatmentSpecCatalog;
+ 
+ class ProductionWaterTreatmentController extends Controller
+@@ -128,8 +131,20 @@ public function destroy(int $id): JsonResponse
+     private function validatePayload(Request $request, ?int $id = null): array
+     {
+         return $request->validate([
+-            'production_order_id' => ['sometimes', 'nullable', 'integer', 'exists:production_orders,id'],
+-            'production_line_id' => ['sometimes', 'nullable', 'integer'],
++            'production_order_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists(ProductionOrder::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
++            'production_line_id' => [
++                'sometimes',
++                'nullable',
++                'integer',
++                Rule::exists(ProductionLine::class, 'id')
++                    ->where(fn ($query) => $query->where('tenant_id', ProductionTenantContext::id())),
++            ],
+             'logged_at' => [$id ? 'sometimes' : 'required', 'date'],
+             'source_type' => ['sometimes', Rule::in(['borehole', 'spring', 'municipal', 'surface', 'tanker'])],
+             'source_reference' => ['sometimes', 'nullable', 'string', 'max:120'],
+diff --git a/Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php b/Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php
+index e0514080e..dce6643d2 100644
+--- a/Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php
++++ b/Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php
+@@ -67,6 +67,7 @@ public function script(Request $request, string $slug): Response
+                 $bot->primary_color ?: '#3b82f6',
+                 (string) $bot->slug,
+                 (string) ($bot->name ?: 'Assistant'),
++                substr(hash('sha256', (string) $bot->updated_at), 0, 12),
+             ),
+             200,
+             [
+@@ -192,18 +193,21 @@ private function buildScript(
+         string $color,
+         string $slug,
+         string $name,
++        string $version,
+     ): string {
+         $embedUrlJs = json_encode($embedUrl);
+         $originJs = json_encode($origin);
+         $colorJs = json_encode($color);
+         $slugJs = json_encode($slug);
+         $nameJs = json_encode($name);
++        $versionJs = json_encode($version);
+ 
+         return <<<JS
+ (function () {
+   "use strict";
+ 
+   var EMBED_URL = {$embedUrlJs};
++  var WIDGET_VERSION = {$versionJs};
+   var ORIGIN = {$originJs};
+   var COLOR = {$colorJs};
+   var SLUG = {$slugJs};
+@@ -269,6 +273,11 @@ function applySize() {
+     frame.style.width = size.width;
+     frame.style.height = size.height;
+     frame.style.pointerEvents = (!isOpen && hideLauncher) ? "none" : "auto";
++    if (hideLauncher) {
++      frame.tabIndex = isOpen ? 0 : -1;
++      frame.inert = !isOpen;
++      frame.setAttribute("aria-hidden", String(!isOpen));
++    }
+   }
+ 
+   function setOpen(open) {
+@@ -294,7 +303,8 @@ function mount() {
+     frame.title = NAME;
+     frame.setAttribute("allow", "microphone");
+     frame.setAttribute("aria-label", NAME);
+-    frame.src = EMBED_URL + "?host=" + encodeURIComponent(location.origin);
++    // A changed bot configuration must not reuse a stale framed response.
++    frame.src = EMBED_URL + "?host=" + encodeURIComponent(location.origin) + "&v=" + WIDGET_VERSION;
+ 
+     var s = frame.style;
+     s.position = "fixed";
+diff --git a/Modules/SupportBot/app/Models/SupportBot.php b/Modules/SupportBot/app/Models/SupportBot.php
+index 8f33f863e..2ef4bca7e 100644
+--- a/Modules/SupportBot/app/Models/SupportBot.php
++++ b/Modules/SupportBot/app/Models/SupportBot.php
+@@ -97,7 +97,7 @@ protected static function booted(): void
+      */
+     public const WIDGET_CONFIG_PUBLIC_KEYS = [
+         'position', 'title', 'subtitle', 'show_avatar', 'launcher_label',
+-        'placeholder', 'theme', 'bubble_icon', 'offline_message',
++        'placeholder', 'theme', 'bubble_icon', 'offline_message', 'suggested_questions',
+     ];
+ 
+     /**
+diff --git a/Modules/SupportBot/app/Notifications/SupportInboxNotification.php b/Modules/SupportBot/app/Notifications/SupportInboxNotification.php
+new file mode 100644
+index 000000000..2beec6143
+--- /dev/null
++++ b/Modules/SupportBot/app/Notifications/SupportInboxNotification.php
+@@ -0,0 +1,31 @@
++<?php
++
++namespace Modules\SupportBot\Notifications;
++
++use Illuminate\Notifications\Messages\BroadcastMessage;
++use Illuminate\Notifications\Notification;
++
++class SupportInboxNotification extends Notification
++{
++    public function __construct(public readonly array $details) {}
++
++    public function via(object $notifiable): array
++    {
++        return ['broadcast'];
++    }
++
++    public function toArray(object $notifiable): array
++    {
++        return $this->details;
++    }
++
++    public function toBroadcast(object $notifiable): BroadcastMessage
++    {
++        return (new BroadcastMessage([
++            'id' => $this->id,
++            'type' => static::class,
++            'data' => $this->details,
++            'created_at' => now()->toISOString(),
++        ]))->onConnection('sync');
++    }
++}
+diff --git a/Modules/SupportBot/app/Providers/SupportBotServiceProvider.php b/Modules/SupportBot/app/Providers/SupportBotServiceProvider.php
+index 18a2b8a27..2691feda6 100644
+--- a/Modules/SupportBot/app/Providers/SupportBotServiceProvider.php
++++ b/Modules/SupportBot/app/Providers/SupportBotServiceProvider.php
+@@ -2,15 +2,26 @@
+ 
+ namespace Modules\SupportBot\Providers;
+ 
++use Illuminate\Support\Facades\Event;
+ use Modules\SupportBot\Console\BenchmarkOllamaModelsCommand;
+ use Modules\SupportBot\Console\CompareEmbeddingModelsCommand;
+ use Modules\SupportBot\Console\EmbedErpKnowledgeCommand;
+ use Modules\SupportBot\Console\IndexErpKnowledgeCommand;
+ use Modules\SupportBot\Console\LearnFromConversationsCommand;
++use Modules\SupportBot\Events\SupportBotMessageBroadcast;
++use Modules\SupportBot\Events\SupportConversationEscalated;
++use Modules\SupportBot\Services\SupportInboxNotifier;
+ use Nwidart\Modules\Support\ModuleServiceProvider;
+ 
+ class SupportBotServiceProvider extends ModuleServiceProvider
+ {
++    public function boot(): void
++    {
++        parent::boot();
++        Event::listen(SupportBotMessageBroadcast::class, fn ($event) => rescue(fn () => app(SupportInboxNotifier::class)->message($event)));
++        Event::listen(SupportConversationEscalated::class, fn ($event) => rescue(fn () => app(SupportInboxNotifier::class)->escalated($event)));
++    }
++
+     protected string $name = 'SupportBot';
+ 
+     protected string $nameLower = 'support_bot';
+diff --git a/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php b/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
+index 88bea7e26..f32500b90 100644
+--- a/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
++++ b/Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php
+@@ -410,6 +410,12 @@ private function speaksLanguageOf(SupportBot $bot, string $message): bool
+ 
+     private function worthPhrasing(string $grounded, string $mode, array $payload): bool
+     {
++        // The retrieved purpose is already a short answer to a definition.
++        // Rewriting it from page guides can turn it back into navigation or add facts.
++        if (($payload['answer_kind'] ?? null) === 'module_explanation') {
++            return false;
++        }
++
+         if (mb_strlen($grounded) < self::MIN_LENGTH_TO_PHRASE) {
+             return false;
+         }
+diff --git a/Modules/SupportBot/app/Services/Copilot/CopilotService.php b/Modules/SupportBot/app/Services/Copilot/CopilotService.php
+index 4b5767041..2adc7dde9 100644
+--- a/Modules/SupportBot/app/Services/Copilot/CopilotService.php
++++ b/Modules/SupportBot/app/Services/Copilot/CopilotService.php
+@@ -320,6 +320,16 @@ private function handleGuidance(string $message, CopilotContext $context, array
+         // the same words as the page they belong to, and taking only three
+         // could leave no page document in the set to prefer.
+         $documents = $this->knowledge->search($message, $context, 8);
++        $tool = $route['tool'];
++        $page = $tool !== null ? $this->knowledge->pageForTool($tool, $context) : null;
++        if ($page !== null) {
++            // Ranking may prefer Production for a question about a product.
++            // The resolved action's page is authoritative, and unrelated
++            // modules must not enter the answer's rewriting context.
++            $documents = collect([$page])->concat($documents
++                ->where('module', $page['module'])
++                ->reject(fn (array $document) => $document['doc_key'] === $page['doc_key']))->values();
++        }
+         $this->currentFacts = $documents->all();
+ 
+         if ($documents->isEmpty()) {
+@@ -332,8 +342,6 @@ private function handleGuidance(string $message, CopilotContext $context, array
+             ?? $documents->firstWhere('kind', 'module')
+             ?? $documents->first();
+ 
+-        $tool = $route['tool'];
+-
+         $body = $this->documentBody($primary, $context);
+ 
+         // If the assistant could also just do it, say so — but only when the
+@@ -356,13 +364,26 @@ private function handleGuidance(string $message, CopilotContext $context, array
+     private function handleInformation(string $message, CopilotContext $context): array
+     {
+         if ($this->isModuleOverviewQuestion($message)) {
+-            return $this->describeModules($context);
++            return $this->describeModules($context, $message);
+         }
+ 
+         if ($this->isCapabilityQuestion($message)) {
+             return $this->describeCapabilities($context);
+         }
+ 
++        if (($module = $this->knowledge->moduleExplanation($message, $context)) !== null) {
++            $this->currentFacts = [$module];
++
++            return $this->reply('**'.$module['title']."**\n\n".$module['summary'], 'information', $context, [
++                'answer_kind' => 'module_explanation',
++                'follow_ups' => ['Where can I find '.$module['title'].'?', 'What modules does Hive have?'],
++                'sources' => $this->sources(collect([$module])),
++                'navigation' => $module['href'] ? [[
++                    'label' => 'Open '.$module['title'], 'href' => $module['href'], 'module' => $module['module'],
++                ]] : [],
++            ]);
++        }
++
+         $documents = $this->knowledge->search($message, $context, 4);
+         $this->currentFacts = $documents->all();
+ 
+@@ -1081,42 +1102,15 @@ private function unsupportedAction(string $message, CopilotContext $context): ar
+         return $this->notCovered($message, $context);
+     }
+ 
+-    private function describeModules(CopilotContext $context): array
++    private function describeModules(CopilotContext $context, string $message): array
+     {
+-        $text = "🏢 **HIVE.OS Enterprise Platform Modules**:\n\n"
+-            ."HIVE.OS includes **32 integrated enterprise modules** organized across key operational pillars:\n\n"
+-            ."• **Operations & Commerce**: [Inventory Catalog](/dashboard/inventory/catalog/products), [Warehouse](/dashboard/warehouse), [POS Terminal](/dashboard/pos), [B2B Marketplace](/dashboard/marketplace), [Sales](/dashboard/finance/sales)\n"
+-            ."• **Finance & Tax**: [Accounting & General Ledger](/dashboard/finance/general-ledger), [Invoicing](/dashboard/finance/sales), [Ethiopian Payroll & Tax](/dashboard/payroll), [Treasury](/dashboard/treasury)\n"
+-            ."• **Workforce & HR**: [Employee Directory](/dashboard/hr/employees), [Attendance & Biometrics](/dashboard/attendance), [Leaves](/dashboard/leave), [Recruitment](/dashboard/recruitment)\n"
+-            ."• **Hospitality & Food**: [Waiter POS](/dashboard/hospitality/waiter-pos), [Kitchen Display (KDS)](/dashboard/hospitality/kds), [Room Booking](/dashboard/hospitality/rooms)\n"
+-            ."• **Manufacturing & Fleet**: [Bill of Materials (BOM)](/dashboard/production), [Work Orders](/dashboard/production/orders), [Fleet & Telemetry](/dashboard/fleet)\n"
+-            ."• **Automation & AI**: [AI Support Bot Studio](/dashboard/support-bot), [CRM & Campaigns](/dashboard/crm), [Project Management](/dashboard/projects)\n\n"
+-            .'Ask me about any specific module, or click a quick action below to explore!';
++        $overview = $this->knowledge->moduleOverview($message);
+ 
+-        return $this->reply(
+-            $text,
+-            'information',
+-            $context,
+-            [
+-                'total_modules' => 32,
+-                'action_buttons' => [
+-                    ['label' => 'Explore Products Catalog', 'url' => '/dashboard/inventory/catalog/products'],
+-                    ['label' => 'Open Payroll Hub', 'url' => '/dashboard/payroll'],
+-                    ['label' => 'Open Hospitality KDS', 'url' => '/dashboard/hospitality/kds'],
+-                ],
+-                // Read straight off the live introspection rather than
+-                // retrieved, so there is no relevance score to judge it by and
+-                // nothing to be uncertain about. Saying so keeps a correct
+-                // answer out of the "questions nobody could answer" queue.
+-                'authoritative' => true,
+-                'follow_ups' => [
+-                    'How to Create a Product?',
+-                    'How to Create an Invoice?',
+-                    'Calculate Salary Tax',
+-                    'How do Table Orders Work on Waiter POS?',
+-                ],
+-            ],
+-        );
++        return $this->reply($overview['content'], 'information', $context, [
++            'total_modules' => $overview['total_modules'],
++            'authoritative' => true,
++            'follow_ups' => ['What is the Procurement module?', 'What is the Payroll module?'],
++        ]);
+     }
+ 
+     private function describeCapabilities(CopilotContext $context): array
+@@ -1283,7 +1277,9 @@ private function toolMentionScore(string $message, array $tool): int
+     private function isModuleOverviewQuestion(string $message): bool
+     {
+         $normalised = Str::lower($message);
+-        $hasModule = Str::contains($normalised, ['module', 'modul', 'ሞጁል']);
++        $hasModule = preg_match('/\bmodules\b|ሞጁሎች/u', $normalised) === 1
++            || (preg_match('/\b(?:how many|list|all)\b/u', $normalised) === 1
++                && preg_match('/\bmodul[a-z]*\b/u', $normalised) === 1);
+         $hasQuestion = Str::contains($normalised, ['how many', 'what', 'which', 'list', 'all', 'exist', 'have', 'count', 'show', 'ስንት']);
+ 
+         return $hasModule && $hasQuestion;
+diff --git a/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php b/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
+index 1479de108..b3ee5f807 100644
+--- a/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
++++ b/Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php
+@@ -4,6 +4,7 @@
+ 
+ use Illuminate\Support\Collection;
+ use Illuminate\Support\Str;
++use Modules\Core\Support\ModuleRegistry;
+ use Modules\SupportBot\Models\CopilotKnowledgeDocument;
+ 
+ /**
+@@ -199,6 +200,80 @@ public function publicSearch(string $query, int $limit = 3): Collection
+             ->values();
+     }
+ 
++    /** A routed task has a known page; a related guide must not displace it. */
++    public function pageForTool(array $tool, CopilotContext $context): ?array
++    {
++        if (empty($tool['target_url'])) {
++            return null;
++        }
++        $document = CopilotKnowledgeDocument::query()
++            ->visibleTo($context->permissions(), $context->isCentral() ? 'central' : 'tenant', $context->enabledModules())
++            ->where('kind', 'submodule')->where('href', $tool['target_url'])->first();
++        if ($document === null) {
++            return null;
++        }
++
++        return [
++            'doc_key' => $document->doc_key, 'kind' => $document->kind,
++            'module' => $document->module, 'submodule' => $document->submodule,
++            'title' => $document->title, 'summary' => $document->summary,
++            'body' => $document->body, 'href' => $document->href, 'score' => 100,
++        ];
++    }
++
++    /** Counts and lists come from the dashboard's catalog, not a hardcoded answer. */
++    public function moduleOverview(string $query): array
++    {
++        $catalog = app(ModuleRegistry::class)->catalog();
++        $count = $catalog->count();
++        $content = "**HIVE.OS Enterprise Platform Modules**\n\nHive has **{$count} registered modules**. "
++            .'Your subscription and permissions determine which ones you can use.';
++        if (! preg_match('/how many|count|ስንት/iu', $query)) {
++            $content .= "\n\n".$catalog->pluck('name')->sort()->map(fn ($name) => '- '.$name)->implode("\n");
++        }
++
++        return ['content' => $content, 'total_modules' => $count];
++    }
++
++    /** A definition needs the named module's purpose, not a high-ranking screen guide. */
++    public function moduleExplanation(string $query, ?CopilotContext $context = null): ?array
++    {
++        $question = Str::lower(trim($query, " \t\n\r\0\x0B?!."));
++        if (! preg_match('/^(?:please\s+)?(?:what (?:is|does)|how does|explain|describe)\s+(?:the\s+)?(.+)$/u', $question, $match)) {
++            return null;
++        }
++        $subject = preg_replace('/\s+(?:briefly|in simple terms)$/u', '', $match[1]);
++        $subject = preg_replace('/\s+(?:module(?:\s+(?:do|work))?|work|do)(?:\s+in\s+hive(?:\.os)?)?$/u', '', $subject);
++        $subject = preg_replace('/\s+module\b.*$/u', '', $subject);
++        $documents = CopilotKnowledgeDocument::query()->where('kind', 'module')->where('doc_key', 'like', 'module:%');
++        if ($context !== null) {
++            $documents->visibleTo($context->permissions(), $context->isCentral() ? 'central' : 'tenant', $context->enabledModules());
++        } else {
++            $documents->whereIn('audience', ['tenant', 'all']);
++        }
++        foreach ($documents->get() as $document) {
++            $names = [$document->title, Str::headline($document->module)];
++            $names[] = preg_replace('/\s+management$/iu', '', $document->title);
++            // Aliases help with an explicitly named module; a screen name alone
++            // (for example invoice matching) must retain its more specific guide.
++            if (preg_match('/\bmodule\b/u', $question)) {
++                $names = array_merge($names, $document->keywords ?? []);
++            }
++            if (! in_array($subject, array_map(fn ($name) => Str::lower(trim($name)), $names), true)) {
++                continue;
++            }
++
++            return [
++                'doc_key' => $document->doc_key, 'kind' => 'module',
++                'module' => $document->module, 'submodule' => null,
++                'title' => $document->title, 'summary' => $document->summary,
++                'body' => $document->body, 'href' => $document->href, 'score' => 100,
++            ];
++        }
++
++        return null;
++    }
++
+     /**
+      * The single best module match for a query, used to answer "how does X
+      * work" and to scope navigation answers.
+diff --git a/Modules/SupportBot/app/Services/SupportBotEngineService.php b/Modules/SupportBot/app/Services/SupportBotEngineService.php
+index d4049717f..243dae37f 100644
+--- a/Modules/SupportBot/app/Services/SupportBotEngineService.php
++++ b/Modules/SupportBot/app/Services/SupportBotEngineService.php
+@@ -348,6 +348,35 @@ public function lastInteractionId(): ?int
+ 
+     private ?int $lastInteractionId = null;
+ 
++    /** Answers a business website from that bot's own published knowledge. */
++    private function resolveCustomerSupportMessage(SupportBot $bot, SupportBotConversation $conversation, string $userText): array
++    {
++        $suggestions = array_values(array_filter($bot->widget_config['suggested_questions'] ?? [], 'is_string'));
++        $payload = ['quick_replies' => array_slice($suggestions, 0, 4)];
++        if (preg_match('/^(hi|hello|hey|good morning|good afternoon|good evening)[!.\s]*$/iu', trim($userText))) {
++            $content = $bot->greeting_message ?: 'Hello! How can I help?';
++        } else {
++            $matches = $this->knowledgeService->search($bot, $userText, 1);
++            $best = $matches[0] ?? null;
++            if ($best !== null) {
++                $content = $best['answer'];
++                $payload['source_kb'] = $best['title'];
++                $source = $best['source_url'] ?? null;
++                if (is_string($source) && filter_var($source, FILTER_VALIDATE_URL) && parse_url($source, PHP_URL_SCHEME) === 'https') {
++                    $payload['action_buttons'] = [['label' => 'Source: '.$best['title'], 'url' => $source]];
++                }
++            } else {
++                $content = $bot->fallback_message ?: 'I could not find a verified answer. Please ask our support team.';
++                $payload['unanswered'] = true;
++            }
++        }
++
++        return [SupportBotMessage::create([
++            'conversation_id' => $conversation->id, 'sender_type' => 'bot',
++            'sender_name' => $bot->name, 'content' => $content, 'payload' => $payload,
++        ])];
++    }
++
+     protected function resolveMessage(SupportBot $bot, SupportBotConversation $conversation, string $userText): array
+     {
+         $lowerText = strtolower(trim($userText));
+@@ -378,17 +407,19 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+                 'content' => 'You are in the queue for our support team. Their reply will appear here. You can return to the assistant at any time.',
+                 'payload' => [
+                     'escalated' => true,
+-                    'quick_replies' => [
+-                        'Back to AI Copilot',
+-                        'How to Create a Product?',
+-                        'Calculate Salary Tax',
+-                    ],
++                    'quick_replies' => ! $bot->featureFlags()['erp_navigation']
++                        ? array_slice($bot->widget_config['suggested_questions'] ?? [], 0, 4)
++                        : ['Back to AI Copilot', 'How to Create a Product?', 'Calculate Salary Tax'],
+                 ],
+             ]);
+ 
+             return [$escalateMsg];
+         }
+ 
++        if (! $bot->featureFlags()['erp_navigation']) {
++            return $this->resolveCustomerSupportMessage($bot, $conversation, $userText);
++        }
++
+         // 2. Comprehensive Step-by-Step ERP Guide & Workflow Dependency Engine
+         if ($guide = $this->matchErpCreationGuide($lowerText)) {
+             $guideMsg = SupportBotMessage::create([
+@@ -477,17 +508,22 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+             return [$convMsg];
+         }
+ 
+-        // 6. Query RAG Knowledge Base
+-        $ragResult = $this->knowledgeService->searchRelevantArticles($bot, $userText);
++        // Definitions use the named module's purpose before ranking screen guides or FAQs.
++        if (($module = $this->platformKnowledge->moduleExplanation($userText)) !== null) {
++            return [SupportBotMessage::create([
++                'conversation_id' => $conversation->id,
++                'sender_type' => 'bot', 'sender_name' => $bot->name ?? 'HIVE.OS Copilot',
++                'content' => '**'.$module['title']."**\n\n".$module['summary'],
++                'payload' => [
++                    'answer_kind' => 'module_explanation', 'source_kb' => $module['title'],
++                    'action_buttons' => $module['href'] ? [['label' => 'Open '.$module['title'], 'url' => $module['href']]] : [],
++                    'quick_replies' => ['Talk to a person', 'What modules does Hive have?'],
++                ],
++            ])];
++        }
+ 
+-        // 6b. And the platform's own generated documentation.
+-        //
+-        // Retrieved *before* the model is asked, not merely as a fallback after
+-        // it fails. Left to answer unaided, a small local model produces a
+-        // fluent description of a Procurement module it has imagined — the
+-        // shape of the answer is right and the content is invented. Handing it
+-        // the real document first makes the model a writer rather than a
+-        // source, which is the same inversion the in-app Copilot relies on.
++        // 6. Retrieve facts before asking the model to write an answer.
++        $ragResult = $this->knowledgeService->searchRelevantArticles($bot, $userText);
+         $platform = $this->answerFromPlatformKnowledge($userText);
+ 
+         // 7. Query LLM if a provider is configured — and if there is something
+@@ -508,7 +544,10 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+             $context = is_array($ragResult) ? $ragResult : [];
+ 
+             if ($platform !== null) {
+-                array_unshift($context, [
++                // A matched platform guide is authoritative for ERP questions.
++                // Loose FAQ hits often contain unrelated legacy instructions;
++                // mixing them in overwhelms a small local model's context.
++                $context = [[
+                     'title' => $platform['title'],
+                     // Trimmed to the conversational part of the document —
+                     // purpose and navigation — not the exhaustive endpoint,
+@@ -518,7 +557,7 @@ protected function resolveMessage(SupportBot $bot, SupportBotConversation $conve
+                     // out. The full, untrimmed document is still what gets
+                     // shown verbatim if the LLM step is skipped entirely.
+                     'content' => Str::limit($platform['content'], 1400, ''),
+-                ]);
++                ]];
+             }
+ 
+             $llmResponseText = $this->llmService->generateResponse(
+@@ -991,7 +1030,7 @@ protected function matchModulesOverviewIntent(string $lower): ?array
+         // explicit overview request should return the general module directory.
+         $hasModuleKeyword = preg_match('/\bmodules\b|ሞጁሎች/u', $lower) === 1
+             || (preg_match('/\b(?:how many|list|all)\b/u', $lower) === 1
+-                && str_contains($lower, 'module'));
++                && preg_match('/\bmodul[a-z]*\b/u', $lower) === 1);
+         $hasCountOrList = str_contains($lower, 'how many') ||
+                           str_contains($lower, 'what') ||
+                           str_contains($lower, 'which') ||
+@@ -1004,29 +1043,11 @@ protected function matchModulesOverviewIntent(string $lower): ?array
+                           str_contains($lower, 'ሞጁል');
+ 
+         if ($hasModuleKeyword && $hasCountOrList) {
+-            $text = "🏢 **HIVE.OS Enterprise Platform Modules**:\n\n".
+-                "HIVE.OS includes **32 integrated enterprise modules** organized across key operational pillars:\n\n".
+-                "• **Operations & Commerce**: [Inventory Catalog](/dashboard/inventory/catalog/products), [Warehouse](/dashboard/warehouse), [POS Terminal](/dashboard/pos), [B2B Marketplace](/dashboard/marketplace), [Sales](/dashboard/finance/sales)\n".
+-                "• **Finance & Tax**: [Accounting & General Ledger](/dashboard/finance/general-ledger), [Invoicing](/dashboard/finance/sales), [Ethiopian Payroll & Tax](/dashboard/payroll), [Treasury](/dashboard/treasury)\n".
+-                "• **Workforce & HR**: [Employee Directory](/dashboard/hr/employees), [Attendance & Biometrics](/dashboard/attendance), [Leaves](/dashboard/leave), [Recruitment](/dashboard/recruitment)\n".
+-                "• **Hospitality & Food**: [Waiter POS](/dashboard/hospitality/waiter-pos), [Kitchen Display (KDS)](/dashboard/hospitality/kds), [Room Booking](/dashboard/hospitality/rooms)\n".
+-                "• **Manufacturing & Fleet**: [Bill of Materials (BOM)](/dashboard/production), [Work Orders](/dashboard/production/orders), [Fleet & Telemetry](/dashboard/fleet)\n".
+-                "• **Automation & AI**: [AI Support Bot Studio](/dashboard/support-bot), [CRM & Campaigns](/dashboard/crm), [Project Management](/dashboard/projects)\n\n".
+-                'Ask me about any specific module, or click a quick action below to explore!';
++            $overview = $this->platformKnowledge->moduleOverview($lower);
+ 
+             return [
+-                'content' => $text,
+-                'action_buttons' => [
+-                    ['label' => 'Explore Products Catalog', 'url' => '/dashboard/inventory/catalog/products'],
+-                    ['label' => 'Open Payroll Hub', 'url' => '/dashboard/payroll'],
+-                    ['label' => 'Open Hospitality KDS', 'url' => '/dashboard/hospitality/kds'],
+-                ],
+-                'quick_replies' => [
+-                    'How to Create a Product?',
+-                    'How to Create an Invoice?',
+-                    'Calculate Salary Tax',
+-                    'How do Table Orders Work on Waiter POS?',
+-                ],
++                'content' => $overview['content'],
++                'quick_replies' => ['What is the Procurement module?', 'What is the Payroll module?', 'Talk to a person'],
+             ];
+         }
+ 
+diff --git a/Modules/SupportBot/app/Services/SupportBotKnowledgeService.php b/Modules/SupportBot/app/Services/SupportBotKnowledgeService.php
+index 16862dc7b..1ee05fcff 100644
+--- a/Modules/SupportBot/app/Services/SupportBotKnowledgeService.php
++++ b/Modules/SupportBot/app/Services/SupportBotKnowledgeService.php
+@@ -28,8 +28,20 @@ public function search(SupportBot $bot, string $query, int $limit = 5): array
+             'any', 'all', 'use', 'using', 'like', 'work', 'works', 'hive',
+         ];
+ 
++        // A company name repeated in every FAQ is not evidence that an
++        // unrelated question is covered by this business's knowledge.
++        if (! $bot->featureFlags()['erp_navigation']) {
++            $stopWords = array_merge($stopWords, preg_split('/[^\pL\pN]+/u', mb_strtolower($bot->name)) ?: []);
++        }
++
++        // Visitors naturally end a topic with punctuation (for example,
++        // "office?"). Keep that punctuation out of business keyword matching.
++        $tokens = ! $bot->featureFlags()['erp_navigation']
++            ? (preg_split('/[^\pL\pN]+/u', $normalized) ?: [])
++            : explode(' ', $normalized);
++
+         $terms = array_values(array_filter(
+-            explode(' ', $normalized),
++            $tokens,
+             fn ($w) => mb_strlen($w) > 2 && ! in_array($w, $stopWords, true),
+         ));
+ 
+@@ -38,7 +50,7 @@ public function search(SupportBot $bot, string $query, int $limit = 5): array
+             now()->addMinutes(5),
+             fn () => $bot->knowledgeBases()
+                 ->where('is_enabled', true)
+-                ->get(['id', 'title', 'question', 'answer', 'category', 'tags']),
++                ->get(['id', 'title', 'question', 'answer', 'category', 'tags', 'source_url']),
+         );
+ 
+         if ($entries->isEmpty()) {
+@@ -101,6 +113,7 @@ public function search(SupportBot $bot, string $query, int $limit = 5): array
+                     'title' => $entry->title,
+                     'question' => $entry->question,
+                     'answer' => $entry->answer,
++                    'source_url' => $entry->source_url,
+                     'category' => $entry->category,
+                     'tags' => $entry->tags,
+                     'score' => $score,
+diff --git a/Modules/SupportBot/app/Services/SupportBotLlmService.php b/Modules/SupportBot/app/Services/SupportBotLlmService.php
+index 5d8815a3e..11b981347 100644
+--- a/Modules/SupportBot/app/Services/SupportBotLlmService.php
++++ b/Modules/SupportBot/app/Services/SupportBotLlmService.php
+@@ -84,6 +84,7 @@ public function lastError(): ?string
+ 1. Only answer questions about HIVE.OS, its modules, and Ethiopian business operations.
+ 2. Never invent module names, routes, or figures.
+ 3. Keep answers concise, helpful, and formatted with clean Markdown.
++   Use at most two short sentences and the most relevant exact page path unless the user asks for steps or a list.
+ 4. Never repeat words or phrases in loops.
+ 5. Write in the language named at the top of these instructions, and in no other. HIVE.OS supports English and Amharic only.
+ EOT;
+@@ -600,7 +601,7 @@ private function dispatch(
+         return $this->guard(match ($provider) {
+             'gemini' => $this->callGemini($apiKey, $model ?: self::DEFAULT_MODELS['gemini'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'groq' => $this->callOpenAiCompatible('https://api.groq.com/openai/v1', $apiKey, $model ?: self::DEFAULT_MODELS['groq'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+-            'ollama' => $this->callOpenAiCompatible($baseUrl, $apiKey ?: 'ollama-local', $model ?: self::DEFAULT_MODELS['ollama'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout, disableThinking: str_starts_with(strtolower($model ?? ''), 'qwen3')),
++            'ollama' => $this->callOllama($baseUrl, $apiKey, $model ?: self::DEFAULT_MODELS['ollama'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'openrouter' => $this->callOpenAiCompatible('https://openrouter.ai/api/v1', $apiKey, $model ?: self::DEFAULT_MODELS['openrouter'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             'anthropic' => $this->callAnthropic($apiKey, $model ?: self::DEFAULT_MODELS['anthropic'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+             default => $this->callOpenAiCompatible('https://api.openai.com/v1', $apiKey, $model ?: self::DEFAULT_MODELS['openai'], $systemPrompt, $history, $userMessage, $temperature, $maxTokens, $timeout),
+@@ -796,6 +797,63 @@ protected function callGemini(
+         return null;
+     }
+ 
++    /** Native options keep CPU inference within the deployment's allocation. */
++    protected function callOllama(
++        string $baseUrl,
++        ?string $apiKey,
++        string $model,
++        string $systemPrompt,
++        array $history,
++        string $userMessage,
++        float $temperature,
++        int $maxTokens,
++        int $timeout,
++    ): ?string {
++        $messages = [['role' => 'system', 'content' => $systemPrompt]];
++        foreach ($history as $message) {
++            $messages[] = [
++                'role' => ($message['sender_type'] ?? 'visitor') === 'visitor' ? 'user' : 'assistant',
++                'content' => (string) ($message['content'] ?? ''),
++            ];
++        }
++        $messages[] = ['role' => 'user', 'content' => $userMessage];
++        $endpoint = preg_replace('~/v1$~', '', rtrim($baseUrl, '/')).'/api/chat';
++
++        try {
++            $request = Http::timeout($timeout)->connectTimeout(5)
++                ->retry(2, 300, self::retryUnlessTimedOut(...), throw: false);
++            if ($apiKey) {
++                $request = $request->withToken($apiKey);
++            }
++            $response = $request->post($endpoint, [
++                'model' => $model,
++                'messages' => $messages,
++                'stream' => false,
++                ...(str_starts_with(strtolower($model), 'qwen3') ? ['think' => false] : []),
++                'options' => [
++                    'temperature' => $temperature,
++                    'num_predict' => $maxTokens,
++                    'num_thread' => max(1, min(16, (int) config('services.ollama.num_thread', 2))),
++                    'num_ctx' => max(512, min(32768, (int) config('services.ollama.num_ctx', 2048))),
++                ],
++            ]);
++            if ($response->successful()) {
++                $text = $response->json('message.content');
++                if (is_string($text) && trim($text) !== '') {
++                    return $text;
++                }
++                $this->lastError = 'Ollama returned no completion text.';
++            } else {
++                $this->lastError = $this->describeHttpError($response->json(), $response->status());
++            }
++        } catch (\Throwable $exception) {
++            $this->lastError = 'Could not reach the configured Ollama service: '.$exception->getMessage();
++            Log::warning('SupportBot Ollama call failed: '.$exception->getMessage());
++        }
++
++        return null;
++    }
++
+     protected function callOpenAiCompatible(
+         string $baseUrl,
+         string $apiKey,
+diff --git a/Modules/SupportBot/app/Services/SupportInboxNotifier.php b/Modules/SupportBot/app/Services/SupportInboxNotifier.php
+new file mode 100644
+index 000000000..4f8ee5da8
+--- /dev/null
++++ b/Modules/SupportBot/app/Services/SupportInboxNotifier.php
+@@ -0,0 +1,78 @@
++<?php
++
++namespace Modules\SupportBot\Services;
++
++use Modules\Identity\Models\User;
++use Modules\SupportBot\Events\SupportBotMessageBroadcast;
++use Modules\SupportBot\Events\SupportConversationEscalated;
++use Modules\SupportBot\Models\SupportBotConversation;
++use Modules\SupportBot\Notifications\SupportInboxNotification;
++use Modules\SupportBot\Support\SupportBotTenantContext;
++use Modules\Tenancy\Models\Tenant;
++use Ramsey\Uuid\Uuid;
++
++/** Persist once, then broadcast to the same authorized staff as the inbox. */
++class SupportInboxNotifier
++{
++    public function message(SupportBotMessageBroadcast $event): void
++    {
++        if ($event->message->sender_type !== 'visitor' || ! $event->conversation->isWithAgent()) {
++            return;
++        }
++        $this->deliver($event->conversation, 'message:'.$event->message->id, false);
++    }
++
++    public function escalated(SupportConversationEscalated $event): void
++    {
++        $notice = SupportBotTenantContext::run((string) $event->conversation->tenant_id,
++            fn () => $event->conversation->messages()->where('sender_type', 'system')->reorder('id', 'desc')->value('id'));
++        $this->deliver($event->conversation, 'escalation:'.($notice ?? $event->conversation->updated_at?->format('U.u')), true);
++    }
++
++    private function deliver(SupportBotConversation $conversation, string $eventKey, bool $escalation): void
++    {
++        $tenantId = (string) ($conversation->tenant_id ?: 'central');
++        $details = [
++            'category' => 'support_chat',
++            'title' => $escalation ? 'A visitor is waiting for support' : 'New customer support message',
++            // Keep visitor text and contact details inside the permission-gated inbox.
++            'body' => $escalation ? 'Open the support inbox to help this visitor.' : 'A visitor has replied. Open the conversation to read it.',
++            'url' => '/dashboard/support-bot/'.$conversation->bot_id.'/inbox?conversation='.$conversation->id,
++            'bot_id' => $conversation->bot_id,
++            'conversation_id' => $conversation->id,
++            'tenant_id' => $tenantId,
++            'created_at' => now()->toISOString(),
++        ];
++        $send = function () use ($conversation, $tenantId, $eventKey, $details): void {
++            // User, roles and notifications must all use the conversation's database.
++            User::query()->with(['roles.permissions', 'permissions'])->where('is_active', true)->chunkById(100, function ($users) use ($conversation, $tenantId, $eventKey, $details): void {
++                foreach ($users as $user) {
++                    if (! $user->can('view_support_bots') && ! $user->can('manage_support_bots')) {
++                        continue;
++                    }
++                    $id = Uuid::uuid5(Uuid::NAMESPACE_URL, 'hive-support:'.$tenantId.':'.$conversation->id.':'.$eventKey.':'.$user->id)->toString();
++                    $stored = $user->notifications()->firstOrCreate(['id' => $id], [
++                        'type' => SupportInboxNotification::class,
++                        'data' => $details,
++                        'read_at' => null,
++                    ]);
++                    if ($stored->wasRecentlyCreated) {
++                        $notification = new SupportInboxNotification($details);
++                        $notification->id = $id;
++                        // The persisted bell item survives even when WebSockets are unavailable.
++                        rescue(fn () => $user->notifyNow($notification));
++                    }
++                }
++            });
++        };
++        $currentTenant = tenancy()->initialized ? (string) tenant('id') : 'central';
++        if ($currentTenant === $tenantId) {
++            $send();
++        } elseif ($tenantId === 'central') {
++            tenancy()->central($send);
++        } else {
++            // A missing workspace must never fall back to central administrators.
++            Tenant::find($tenantId)?->run($send);
++        }
++    }
++}
+diff --git a/Modules/Tenancy/database/seeders/TenantFoundationSeeder.php b/Modules/Tenancy/database/seeders/TenantFoundationSeeder.php
+index e97e08e23..756e9163e 100644
+--- a/Modules/Tenancy/database/seeders/TenantFoundationSeeder.php
++++ b/Modules/Tenancy/database/seeders/TenantFoundationSeeder.php
+@@ -47,13 +47,6 @@ public function run(): void
+ 
+         $this->call([
+             TenantRolesSeeder::class,
+-            // Tenant accounts were silently missing from every provisioned
+-            // tenant: this was the only seeder that runs during provisioning,
+-            // and it never called TenantUsersSeeder, so admin@<tenant>.com and
+-            // the techive team simply did not exist and no tenant login could
+-            // succeed. Idempotent (updateOrCreate / firstOrCreate) and safe in
+-            // production (SeedsUsers never republishes a password there);
+-            // migrated tenants return early inside the seeder itself.
+             TenantUsersSeeder::class,
+             TenantGeneralSettingsSeeder::class,
+             StorageSettingsSeeder::class,
+diff --git a/config/services.php b/config/services.php
+index 919c66ca6..4c811261c 100644
+--- a/config/services.php
++++ b/config/services.php
+@@ -63,6 +63,8 @@
+ 
+     'ollama' => [
+         'base_url' => env('OLLAMA_BASE_URL', 'http://localhost:11434/v1'),
++        'num_thread' => env('OLLAMA_NUM_THREAD', 2),
++        'num_ctx' => env('OLLAMA_CONTEXT_LENGTH', 2048),
+         // Comma-separated, exact base URLs that administrators may select.
+         // The primary OLLAMA_BASE_URL is always allowed automatically.
+         'allowed_base_urls' => array_values(array_filter(array_map(
+diff --git a/scripts/backfill-good-inventory-item-bridge.php b/scripts/backfill-good-inventory-item-bridge.php
+new file mode 100644
+index 000000000..dc85df1d3
+--- /dev/null
++++ b/scripts/backfill-good-inventory-item-bridge.php
+@@ -0,0 +1,50 @@
++<?php
++
++/**
++ * Backfill procurement InventoryItem bridges for existing Goods.
++ * Safe/idempotent: creates or updates by good_id/sku. No demo fake data.
++ */
++
++require __DIR__.'/../vendor/autoload.php';
++$app = require __DIR__.'/../bootstrap/app.php';
++$app->make(Kernel::class)->bootstrap();
++
++use Illuminate\Contracts\Console\Kernel;
++use Modules\Inventory\Models\Good;
++use Modules\Inventory\Models\InventoryItem;
++use Modules\Inventory\Support\InventoryTenantContext;
++
++$tenant = $argv[1] ?? 'lanouveil';
++
++InventoryTenantContext::run($tenant, function () use ($tenant) {
++    $goods = Good::query()->orderBy('id')->get();
++    echo "Tenant={$tenant} goods={$goods->count()}\n";
++
++    foreach ($goods as $good) {
++        $item = InventoryItem::query()->where('good_id', $good->id)->first()
++            ?: InventoryItem::query()->where('sku', $good->sku)->first();
++
++        $payload = [
++            'tenant_id' => $good->tenant_id,
++            'good_id' => $good->id,
++            'sku' => $good->sku,
++            'name' => $good->name,
++            'unit' => $good->uom ?: 'units',
++            'reorder_level' => (float) ($good->reorder_level ?? 0),
++            'cost_price' => (float) ($good->unit_cost ?? 0),
++            'selling_price' => (float) ($good->unit_cost ?? 0),
++            'is_active' => (bool) ($good->is_active ?? ($good->status === 'active')),
++            'current_stock' => (float) ($good->quantity_on_hand ?? 0),
++        ];
++
++        if ($item) {
++            $item->fill($payload)->save();
++            echo "updated item #{$item->id} <- {$good->sku}\n";
++        } else {
++            $item = InventoryItem::query()->create($payload);
++            echo "created item #{$item->id} <- {$good->sku}\n";
++        }
++    }
++});
++
++echo "DONE\n";

@@ -494,9 +494,9 @@ services:
 
   # Laravel Backend
   backend:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-02d756da45f80c28b6fafe80c3ec10818c887ef3}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-0e88096ee763792bfdfe3e97b0c01c32ce3d5ed1}
     build:
-      context: ./ops/releases/support-message-alerts-20261018/backend
+      context: ./ops/releases/combined-branches-20261018/backend
     pull_policy: build
     container_name: hive-backend
     restart: unless-stopped
@@ -625,9 +625,9 @@ services:
 
   # Queue Worker / Horizon
   queue:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-02d756da45f80c28b6fafe80c3ec10818c887ef3}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-0e88096ee763792bfdfe3e97b0c01c32ce3d5ed1}
     build:
-      context: ./ops/releases/support-message-alerts-20261018/backend
+      context: ./ops/releases/combined-branches-20261018/backend
     pull_policy: build
     container_name: hive-queue
     restart: unless-stopped
@@ -720,9 +720,9 @@ services:
   # Laravel scheduler (backups, trash purge, integrations sync, ...). The
   # legacy stack ran this as hive-scheduler; it was lost in the Coolify move.
   scheduler:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-02d756da45f80c28b6fafe80c3ec10818c887ef3}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-0e88096ee763792bfdfe3e97b0c01c32ce3d5ed1}
     build:
-      context: ./ops/releases/support-message-alerts-20261018/backend
+      context: ./ops/releases/combined-branches-20261018/backend
     pull_policy: build
     container_name: hive-scheduler
     restart: unless-stopped
@@ -807,9 +807,9 @@ services:
 
   # WebSocket Engine
   reverb:
-    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-02d756da45f80c28b6fafe80c3ec10818c887ef3}
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-0e88096ee763792bfdfe3e97b0c01c32ce3d5ed1}
     build:
-      context: ./ops/releases/support-message-alerts-20261018/backend
+      context: ./ops/releases/combined-branches-20261018/backend
     pull_policy: build
     container_name: hive-reverb
     restart: unless-stopped
@@ -980,7 +980,7 @@ services:
 
   # Next.js Frontend
   frontend:
-    image: ghcr.io/techiveet/hive-os-frontend:${HIVE_FRONTEND_TAG:-aa3212d1c366c604815e63cdb86d51f3d97a01de}
+    image: ghcr.io/techiveet/hive-os-frontend:${HIVE_FRONTEND_TAG:-cac32730d5087ba476b95895bdfce2d8ed2c3155}
     pull_policy: if_not_present
     container_name: hive-frontend
     restart: unless-stopped
