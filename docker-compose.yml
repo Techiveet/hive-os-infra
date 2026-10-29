@@ -4,6 +4,8 @@ services:
     image: redis:alpine
     container_name: hive-redis
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -45,6 +47,8 @@ services:
     image: getmeili/meilisearch:v1.10
     container_name: hive-search
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MEILISEARCH_HOST_PORT:-7701}:7700"
     environment:
       - MEILI_MASTER_KEY=${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       - MEILI_NO_ANALYTICS=true
@@ -722,6 +726,8 @@ services:
       dockerfile: Dockerfile
     container_name: hive-ffmpeg
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${FFMPEG_HOST_PORT:-9092}:9090"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=3g
@@ -747,6 +753,8 @@ services:
     profiles:
       - docs
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${GOTENBERG_HOST_PORT:-8090}:3000"
     networks:
       - hive-network
 
@@ -913,6 +921,8 @@ services:
       context: ./video-backend
     container_name: hive-video-backend
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${VIDEO_BACKEND_HOST_PORT:-5001}:5001"
     env_file: .video/backend.env
     volumes:
       - hive-video-data:/app/data
