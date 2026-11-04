@@ -1,0 +1,224 @@
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # -------------------------------------------------------------
+  # Test 1: Backend vs Database Independence
+  # -------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'probe_success{instance="http://backend:8000/health/live",job="blackbox-http"}'
+        values: '1 1 0 0 0 1 1'
+      - series: 'hive_database_up{job="hive-backend"}'
+        values: '1 1 1 1 1 0 0'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: HiveBackendDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: backend
+              environment: production
+              job: blackbox-http
+              instance: 'http://backend:8000/health/live'
+            exp_annotations:
+              summary: "Hive Backend application process is unreachable"
+              description: "The core Laravel/RoadRunner HTTP backend process is failing liveness checks or unreachable."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#1-incident-severity-model--response-slas"
+      - eval_time: 7m
+        alertname: PostgresDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: postgres
+              environment: production
+              job: hive-backend
+            exp_annotations:
+              summary: "PostgreSQL Database is unreachable"
+              description: "Hive database connectivity probe failed."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#3-database-incident--lock-saturation-playbook"
+
+  # -------------------------------------------------------------
+  # Test 2: WAL Counter Increase Semantics (Historical vs New Failures)
+  # -------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'hive_postgres_wal_failed_count{job="hive-backend"}'
+        values: '5 5 5 5 5 7 7'
+      - series: 'hive_postgres_wal_archive_age_seconds{job="hive-backend"}'
+        values: '15 20 25 30 35 40 45'
+    alert_rule_test:
+      # At 4m: age is fresh (<60s) and failed_count is unchanged -> NO ALERT
+      - eval_time: 4m
+        alertname: WALArchiveLagCritical
+        exp_alerts: []
+      # At 6m: failed_count increased from 5 to 7 -> Critical alert MUST fire
+      - eval_time: 6m
+        alertname: WALArchiveLagCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: backup
+              environment: production
+              job: hive-backend
+            exp_annotations:
+              summary: "PostgreSQL WAL Archival critically lagging or new archival failures detected"
+              description: "WAL archival delay exceeded 300s (5m) or new failed WAL archiving attempts were detected in the last 5 minutes."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#4-database-corruption--isolated-recovery-workflow"
+
+  # -------------------------------------------------------------
+  # Test 3: Redis Memory Semantics (Finite maxmemory vs maxmemory=0)
+  # -------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      # Scenario A: Finite maxmemory = 256MB (268435456), usage increases to 90%
+      - series: 'hive_redis_memory_max_bytes{job="hive-backend",instance="finite"}'
+        values: '268435456+0x10'
+      - series: 'hive_redis_memory_bytes{job="hive-backend",instance="finite"}'
+        values: '100000000 100000000 250000000+0x8'
+      # Scenario B: maxmemory = 0 (unlimited), usage normal (100MB) then surges past 512MB (650MB)
+      - series: 'hive_redis_memory_max_bytes{job="hive-backend",instance="unlimited"}'
+        values: '0+0x10'
+      - series: 'hive_redis_memory_bytes{job="hive-backend",instance="unlimited"}'
+        values: '100000000 100000000 650000000+0x8'
+    alert_rule_test:
+      - eval_time: 8m
+        alertname: RedisMemoryHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: redis
+              environment: production
+              job: hive-backend
+              instance: finite
+            exp_annotations:
+              summary: "Redis memory usage high (> 85% or > 512MB absolute limit)"
+              description: "Redis cache memory usage exceeded configured thresholds (safe against maxmemory=0)."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+          - exp_labels:
+              severity: warning
+              service: redis
+              environment: production
+              job: hive-backend
+              instance: unlimited
+            exp_annotations:
+              summary: "Redis memory usage high (> 85% or > 512MB absolute limit)"
+              description: "Redis cache memory usage exceeded configured thresholds (safe against maxmemory=0)."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+  # -------------------------------------------------------------
+  # Test 4: 5xx Error Rate Ratio Alerts
+  # -------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'hive_http_requests_total{job="hive-backend"}'
+        values: '0+100x12'
+      - series: 'hive_http_errors_total{job="hive-backend",status_class="5xx"}'
+        values: '0 0 2 4 6 8 16 24 32 40 48 56'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: High5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: backend
+              environment: production
+            exp_annotations:
+              summary: "Elevated 5xx Error Rate on Hive ERP (> 1% under active traffic)"
+              description: "5xx server error ratio exceeded 1% of total HTTP requests over 5 minutes."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#1-incident-severity-model--response-slas"
+      - eval_time: 8m
+        alertname: Critical5xxRate
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: backend
+              environment: production
+            exp_annotations:
+              summary: "Critical 5xx Error Rate on Hive ERP (> 5% under active traffic)"
+              description: "5xx server error ratio exceeded 5% of total HTTP requests over 2 minutes."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#1-incident-severity-model--response-slas"
+
+  # -------------------------------------------------------------
+  # Test 5: Background Queue Backlog & Oldest Job Alerts
+  # -------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'hive_queue_pending_jobs{job="hive-backend"}'
+        values: '100 200 600 650 700 1200 1250'
+      - series: 'hive_queue_oldest_job_age_seconds{job="hive-backend"}'
+        values: '30 60 120 350 400 450 500'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: QueueBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: queue
+              environment: production
+              job: hive-backend
+            exp_annotations:
+              summary: "Queue backlog accumulating (> 500 pending jobs)"
+              description: "Pending jobs in background Redis queues exceeded 500 for 3 minutes."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+      - eval_time: 5m
+        alertname: QueueOldestJobTooOld
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: queue
+              environment: production
+              job: hive-backend
+            exp_annotations:
+              summary: "Queue oldest job age exceeded SLA (> 300s)"
+              description: "A background job has been waiting in queue longer than 5 minutes."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+      - eval_time: 6m
+        alertname: QueueBacklogCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: queue
+              environment: production
+              job: hive-backend
+            exp_annotations:
+              summary: "Queue backlog critical (> 1000 pending jobs)"
+              description: "Pending jobs in background Redis queues exceeded 1000."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+  # -------------------------------------------------------------
+  # Test 6: Database Connection Pool Capacity Alerts
+  # -------------------------------------------------------------
+  - interval: 1m
+    input_series:
+      - series: 'hive_database_connections_active{job="hive-backend"}'
+        values: '20 40 75 75 75 90 90'
+      - series: 'hive_database_connections_max{job="hive-backend"}'
+        values: '100+0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: PostgresConnectionsWarning
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: postgres
+              environment: production
+              job: hive-backend
+            exp_annotations:
+              summary: "PostgreSQL connection pool near capacity (> 70%)"
+              description: "Active connections exceeded 70% of max pool limit."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#3-database-incident--lock-saturation-playbook"
+      - eval_time: 6m
+        alertname: PostgresConnectionsCritical
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: postgres
+              environment: production
+              job: hive-backend
+            exp_annotations:
+              summary: "PostgreSQL connection pool critically saturated (> 85%)"
+              description: "Active connections exceeded 85% of max pool limit."
+              runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#3-database-incident--lock-saturation-playbook"

@@ -14,13 +14,13 @@ services:
       - .env
     environment:
       CF_API_TOKEN: ${CF_API_TOKEN:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-hive-monitor.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-hive-monitor.techiveet.com}
     ports:
       - "80:80"
       - "443:443"
@@ -35,7 +35,7 @@ services:
       backend:
         condition: service_healthy
       reverb:
-        condition: service_started
+        condition: service_healthy
       grafana:
         condition: service_started
     networks:
@@ -51,6 +51,16 @@ services:
     image: redis:alpine
     container_name: hive-redis
     restart: unless-stopped
+    # Queues, sessions and cache share this instance. Cap memory below the
+    # container limit and only evict keys that carry a TTL (cache, sessions),
+    # never queued jobs. Set REDIS_PASSWORD in .env to require auth; the
+    # backend reads the same variable.
+    command: >
+      sh -c 'exec redis-server --appendonly yes --maxmemory 640mb --maxmemory-policy volatile-lru $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      # redis-cli (healthcheck, scripts) authenticates from this.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:-}
     deploy:
       resources:
         limits:
@@ -58,6 +68,8 @@ services:
           memory: 768M
     expose:
       - "6379"
+    volumes:
+      - ./storage/redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -65,7 +77,9 @@ services:
       retries: 10
       start_period: 5s
     networks:
-      - hive-network
+      hive-network:
+        aliases:
+          - hive-stack-redis
     logging:
       driver: "json-file"
       options:
@@ -147,7 +161,13 @@ services:
   #   docker compose -f docker-compose.prod.yml --profile backup-offsite up -d
   # after filling in the BACKUP_REMOTE_* vars in .env.
   db-backup-offsite:
-    image: minio/mc:latest
+    # The pinned, checksum-verified mc client (seaweedfs-bootstrap/Dockerfile),
+    # as in docker-compose.prod.vps.yml. quay.io/minio/mc now refuses
+    # anonymous pulls (401), which broke every fresh environment and CI.
+    build:
+      context: ./seaweedfs-bootstrap
+      dockerfile: Dockerfile
+    image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-db-backup-offsite
     restart: unless-stopped
     profiles:
@@ -212,7 +232,13 @@ services:
         max-file: "3"
 
   seaweedfs-bootstrap:
-    image: minio/mc:latest
+    # The pinned, checksum-verified mc client (seaweedfs-bootstrap/Dockerfile),
+    # as in docker-compose.prod.vps.yml. quay.io/minio/mc now refuses
+    # anonymous pulls (401), which broke every fresh environment and CI.
+    build:
+      context: ./seaweedfs-bootstrap
+      dockerfile: Dockerfile
+    image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-seaweedfs-bootstrap
     restart: "no"
     depends_on:
@@ -377,7 +403,7 @@ services:
 
   # Laravel Backend
   backend:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:latest
     container_name: hive-backend
     restart: unless-stopped
     deploy:
@@ -398,16 +424,16 @@ services:
       APP_ENV: production
       OCTANE_SERVER: roadrunner
       SERVER_IP: ${SERVER_IP:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.gulfingot.com}
-      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.gulfingot.com}
-      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.gulfingot.com}
-      DB_DOMAIN: ${DB_DOMAIN:-hive-db.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.techiveet.com}
+      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.techiveet.com}
+      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.techiveet.com}
+      DB_DOMAIN: ${DB_DOMAIN:-hive-db.techiveet.com}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
       FRONTEND_INTERNAL_URL: ${FRONTEND_INTERNAL_URL:-http://frontend:3000}
       REVERB_INTERNAL_URL: ${REVERB_INTERNAL_URL:-http://reverb:9000}
@@ -415,13 +441,14 @@ services:
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
-      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       REMBG_INTERNAL_URL: ${REMBG_INTERNAL_URL:-http://rembg:5000}
       GOTENBERG_INTERNAL_URL: ${GOTENBERG_INTERNAL_URL:-http://gotenberg:3000}
       FFMPEG_INTERNAL_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
+      FFMPEG_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
       REVERB_APP_ID: ${REVERB_APP_ID}
       REVERB_APP_KEY: ${REVERB_APP_KEY}
@@ -451,7 +478,7 @@ services:
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan optimize:clear &&
         php artisan config:cache &&
         php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
@@ -470,7 +497,7 @@ services:
 
   # Queue Worker / Horizon
   queue:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:latest
     container_name: hive-queue
     restart: unless-stopped
     deploy:
@@ -489,18 +516,19 @@ services:
         max-file: "3"
     environment:
       APP_ENV: production
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
-      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      FFMPEG_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
       REVERB_APP_ID: ${REVERB_APP_ID}
       REVERB_APP_KEY: ${REVERB_APP_KEY}
@@ -522,11 +550,13 @@ services:
         condition: service_healthy
       backend:
         condition: service_healthy
+      ffmpeg:
+        condition: service_healthy
     command: >
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan horizon
       '
     networks:
@@ -534,7 +564,7 @@ services:
 
   # Central scheduler
   scheduler:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:latest
     container_name: hive-scheduler
     restart: unless-stopped
     deploy:
@@ -546,16 +576,16 @@ services:
       - .env
     environment:
       APP_ENV: production
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
-      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
@@ -590,7 +620,7 @@ services:
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan schedule:work
       '
     networks:
@@ -598,7 +628,7 @@ services:
 
   # WebSocket Engine
   reverb:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:latest
     container_name: hive-reverb
     restart: unless-stopped
     deploy:
@@ -617,14 +647,14 @@ services:
         max-file: "3"
     environment:
       APP_ENV: production
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
-      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
       REVERB_SERVER_HOST: 0.0.0.0
       REVERB_SERVER_PORT: 9000
@@ -646,17 +676,25 @@ services:
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan reverb:start --host=0.0.0.0 --port=9000
       '
     expose:
       - "9000"
+    healthcheck:
+      test: ["CMD-SHELL", "php -r 'exit((@fsockopen(\"hive-stack-redis\", 6379) && @fsockopen(\"127.0.0.1\", 9000)) ? 0 : 1);'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     networks:
-      - hive-network
+      hive-network:
+        aliases:
+          - hive-reverb
 
   # Next.js Frontend
   frontend:
-    image: ghcr.io/mcmike2223/hive-os-frontend:latest
+    image: ghcr.io/techiveet/hive-os-frontend:latest
     container_name: hive-frontend
     restart: unless-stopped
     env_file:
@@ -668,24 +706,24 @@ services:
         max-file: "3"
     environment:
       SERVER_IP: ${SERVER_IP:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.gulfingot.com}
-      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.gulfingot.com}
-      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.gulfingot.com}
-      DB_DOMAIN: ${DB_DOMAIN:-hive-db.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.techiveet.com}
+      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.techiveet.com}
+      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.techiveet.com}
+      DB_DOMAIN: ${DB_DOMAIN:-hive-db.techiveet.com}
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
       NEXT_PUBLIC_CENTRAL_DOMAINS: ${NEXT_PUBLIC_CENTRAL_DOMAINS:-}
-      NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-gulfingot.com}
+      NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-techiveet.com}
       NEXT_PUBLIC_SERVER_IP: ${NEXT_PUBLIC_SERVER_IP:-}
-      NEXT_PUBLIC_FRONTEND_DOMAIN: ${NEXT_PUBLIC_FRONTEND_DOMAIN:-hive.gulfingot.com}
-      NEXT_PUBLIC_BACKEND_DOMAIN: ${NEXT_PUBLIC_BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      NEXT_PUBLIC_REVERB_DOMAIN: ${NEXT_PUBLIC_REVERB_DOMAIN:-hive-ws.gulfingot.com}
+      NEXT_PUBLIC_FRONTEND_DOMAIN: ${NEXT_PUBLIC_FRONTEND_DOMAIN:-hive.techiveet.com}
+      NEXT_PUBLIC_BACKEND_DOMAIN: ${NEXT_PUBLIC_BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      NEXT_PUBLIC_REVERB_DOMAIN: ${NEXT_PUBLIC_REVERB_DOMAIN:-hive-ws.techiveet.com}
       NEXT_PUBLIC_REVERB_APP_KEY: ${NEXT_PUBLIC_REVERB_APP_KEY}
       NEXT_PUBLIC_REVERB_HOST: ${NEXT_PUBLIC_REVERB_HOST}
       NEXT_PUBLIC_REVERB_PORT: ${NEXT_PUBLIC_REVERB_PORT}
@@ -695,7 +733,7 @@ services:
       REVERB_INTERNAL_URL: ${REVERB_INTERNAL_URL:-http://reverb:9000}
       QUEUE_INTERNAL_HOST: ${QUEUE_INTERNAL_HOST:-queue}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       REMBG_INTERNAL_URL: ${REMBG_INTERNAL_URL:-http://rembg:5000}
       GOTENBERG_INTERNAL_URL: ${GOTENBERG_INTERNAL_URL:-http://gotenberg:3000}

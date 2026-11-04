@@ -1,0 +1,34 @@
+# Local values layer for the LaraOwl server stack (hive-os-infra).
+#
+# What it changes vs the upstream compose (after docker-compose.override.yml
+# has reset the caddy ports/volumes):
+#   - Caddy is exposed on host port 8000 instead of 80/443 (the hive stack
+#     owns 80/443 on this host).
+#   - A local HTTP-only Caddyfile is bound (no ACME; localhost in dev).
+#     Bind mounts resolve relative to the project dir (the first -f file's
+#     directory, laraowl/), hence the ../deploy/... path.
+#   - The caddy healthcheck probes http://localhost instead of https://localhost.
+#
+# Usage (from hive-os-infra):
+#   docker compose -f laraowl/docker-compose.yaml \
+#     -f deploy/laraowl/docker-compose.override.yml \
+#     -f deploy/laraowl/docker-compose.local.yml up -d
+#
+# Production: use the upstream docker-compose.yaml as-is with a real
+# APP_HOSTNAME (auto-HTTPS via the baked Caddyfile) and set LARAOWL_CLIENT_URL
+# to the public URL in the hive backend's .env.
+services:
+  caddy:
+    ports:
+      - "8000:80"
+    volumes:
+      - ../deploy/laraowl/Caddyfile.local:/etc/caddy/Caddyfile:ro
+      - storage:/usr/share/caddy/html/storage:rw
+      - public:/usr/share/caddy/html/public:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://localhost/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5

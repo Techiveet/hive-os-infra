@@ -1,0 +1,49 @@
+# Local HTTP-only Caddyfile for the LaraOwl server.
+# Mirrors the upstream docker/Caddyfile but serves plain http://:80 so the
+# stack works on localhost without DNS/ACME. Production should use the
+# upstream Caddyfile (auto-HTTPS on the real APP_HOSTNAME).
+http://:80 {
+	root * /usr/share/caddy/html/public
+
+	header {
+		# disable clients from sniffing the media type
+		X-Content-Type-Options "nosniff"
+
+		# clickjacking protection
+		X-Frame-Options "SAMEORIGIN"
+
+		# NOTE: no upgrade-insecure-requests CSP here — this is a local HTTP-only
+		# stack, and that directive makes browsers upgrade the post-login redirect
+		# to https, which Caddy does not serve locally (SSL_PROTOCOL_ERROR).
+		# Production uses the upstream Caddyfile (auto-HTTPS) where it belongs.
+
+		# hide server name
+		-Server Caddy
+	}
+
+	# Allow large file uploads
+	request_body {
+		max_size 100mb
+	}
+
+	# Serve storage files directly
+	handle_path /storage/* {
+		root * /usr/share/caddy/html/storage/app/public
+		file_server
+		header Cache-Control "public, max-age=31536000"
+	}
+
+	# Proxy Reverb WebSocket connection
+	handle /app* {
+		reverse_proxy reverb:8080
+	}
+
+	# Handle PHP files with FastCGI
+	php_fastcgi app:9000
+	file_server
+
+	log {
+		output stdout
+		format console
+	}
+}

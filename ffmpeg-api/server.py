@@ -10,12 +10,16 @@ Endpoints:
   GET  /health      — Health check
 """
 
+import json
 import os
 import subprocess
 import tempfile
 import uuid
+from io import BytesIO
 from pathlib import Path
 
+import cv2
+import numpy as np
 from flask import Flask, request, send_file, jsonify
 
 app = Flask(__name__)
@@ -27,8 +31,22 @@ ALLOWED_VIDEO_OUT = {"mp4", "webm", "mov", "avi", "mkv", "gif", "m4v"}
 ALLOWED_AUDIO_IN  = {"mp3", "ogg", "wav", "flac", "aac", "m4a", "opus", "wma", "mp4", "mov", "mkv", "avi"}
 ALLOWED_AUDIO_OUT = {"mp3", "ogg", "wav", "flac", "aac", "m4a", "opus"}
 ALLOWED_IMAGE_OUT = {"jpg", "jpeg", "png", "webp", "gif"}
+ALLOWED_SUBTITLE_IN = {"vtt", "srt", "ass", "ssa", "sub", "sbv", "ttml", "dfxp"}
+MAX_SUBTITLE_FILE_SIZE = 2 * 1024 * 1024
 
 MAX_FILE_SIZE = 1 * 1024 * 1024 * 1024  # 1 GB
+MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024
+MAX_IMAGE_PIXELS = 24_000_000
+app.config["MAX_CONTENT_LENGTH"] = MAX_FILE_SIZE
+OPENCV_OPERATIONS = {
+    "smart_cutout",
+    "logo_cutout",
+    "background_blur",
+    "auto_enhance",
+    "denoise",
+    "sharpen",
+    "edge_sketch",
+}
 
 MIME = {
     "mp4": "video/mp4", "webm": "video/webm", "mov": "video/quicktime",
@@ -58,8 +76,211 @@ def run_ffmpeg(args: list[str], timeout: int = 300) -> tuple[bool, str]:
         return False, str(e)
 
 
+def probe_media_duration(path: str) -> float | None:
+    """Return the source duration so packaged subtitle cues cannot extend the MP4."""
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe", "-v", "error", "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1", path,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        duration = float(result.stdout.strip()) if result.returncode == 0 else 0.0
+        return duration if duration > 0 else None
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
 def error(message: str, status: int = 400):
     return jsonify({"error": message}), status
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return error("The uploaded request exceeds the 1 GB limit.", 413)
+
+
+def bounded_int(value, default: int, minimum: int, maximum: int) -> int:
+    """Parse a bounded integer form value without exposing conversion errors."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = default
+    return max(minimum, min(maximum, parsed))
+
+
+def decode_uploaded_image(upload) -> np.ndarray:
+    """Decode an uploaded image as BGRA and enforce memory-safe limits."""
+    payload = upload.read()
+    if not payload:
+        raise ValueError("The uploaded image is empty.")
+    if len(payload) > MAX_IMAGE_FILE_SIZE:
+        raise ValueError("The uploaded image exceeds the 20 MB limit.")
+
+    encoded = np.frombuffer(payload, dtype=np.uint8)
+    image = cv2.imdecode(encoded, cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise ValueError("OpenCV could not decode the uploaded image.")
+
+    height, width = image.shape[:2]
+    if height < 2 or width < 2:
+        raise ValueError("The uploaded image is too small to process.")
+    if height * width > MAX_IMAGE_PIXELS:
+        raise ValueError("The uploaded image exceeds the 24 megapixel limit.")
+
+    if image.ndim == 2:
+        image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGRA)
+    elif image.shape[2] == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2BGRA)
+    elif image.shape[2] != 4:
+        raise ValueError("The uploaded image uses an unsupported channel layout.")
+
+    return image
+
+
+def soften_alpha(mask: np.ndarray, feather: int) -> np.ndarray:
+    """Clean small mask defects and optionally feather the resulting edge."""
+    min_dimension = min(mask.shape[:2])
+    kernel_size = 3 if min_dimension < 900 else 5
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    cleaned = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, kernel)
+
+    if feather <= 0:
+        return cleaned
+
+    blur_size = max(3, feather * 2 + 1)
+    if blur_size % 2 == 0:
+        blur_size += 1
+    return cv2.GaussianBlur(cleaned, (blur_size, blur_size), 0)
+
+
+def grabcut_alpha(bgr: np.ndarray, feather: int = 4) -> np.ndarray:
+    """Estimate the main subject with GrabCut and return an alpha mask."""
+    height, width = bgr.shape[:2]
+    margin = max(1, int(min(width, height) * 0.035))
+    rectangle = (margin, margin, max(1, width - margin * 2), max(1, height - margin * 2))
+    mask = np.zeros((height, width), dtype=np.uint8)
+    background_model = np.zeros((1, 65), dtype=np.float64)
+    foreground_model = np.zeros((1, 65), dtype=np.float64)
+
+    cv2.grabCut(
+        bgr,
+        mask,
+        rectangle,
+        background_model,
+        foreground_model,
+        5,
+        cv2.GC_INIT_WITH_RECT,
+    )
+    foreground = np.where(
+        (mask == cv2.GC_FGD) | (mask == cv2.GC_PR_FGD),
+        255,
+        0,
+    ).astype(np.uint8)
+
+    coverage = float(np.count_nonzero(foreground)) / float(foreground.size)
+    if coverage < 0.01 or coverage > 0.98:
+        raise ValueError("OpenCV could not confidently separate a foreground subject.")
+
+    return soften_alpha(foreground, feather)
+
+
+def logo_background_alpha(bgr: np.ndarray, tolerance: int, feather: int) -> np.ndarray:
+    """Remove only border-connected pixels similar to the median border colour."""
+    lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB).astype(np.float32)
+    border = np.concatenate((lab[0, :, :], lab[-1, :, :], lab[:, 0, :], lab[:, -1, :]), axis=0)
+    background_colour = np.median(border, axis=0)
+    distance = np.linalg.norm(lab - background_colour, axis=2)
+    candidate_background = (distance <= tolerance).astype(np.uint8)
+
+    component_count, labels = cv2.connectedComponents(candidate_background, connectivity=8)
+    if component_count <= 1:
+        raise ValueError("OpenCV could not identify a connected logo background.")
+
+    touching_labels = np.unique(
+        np.concatenate((labels[0, :], labels[-1, :], labels[:, 0], labels[:, -1]))
+    )
+    touching_labels = touching_labels[touching_labels != 0]
+    connected_background = np.isin(labels, touching_labels)
+    alpha = np.where(connected_background, 0, 255).astype(np.uint8)
+
+    if np.count_nonzero(alpha) == 0:
+        raise ValueError("The selected tolerance removed the entire image.")
+
+    return soften_alpha(alpha, feather)
+
+
+def apply_opencv_operation(
+    image: np.ndarray,
+    operation: str,
+    *,
+    tolerance: int = 32,
+    feather: int = 4,
+    strength: int = 50,
+) -> np.ndarray:
+    """Apply one supported, deterministic OpenCV operation and return BGRA."""
+    if operation not in OPENCV_OPERATIONS:
+        raise ValueError(f"Unsupported OpenCV operation: {operation}")
+
+    bgr = image[:, :, :3]
+    source_alpha = image[:, :, 3]
+    output_bgr = bgr.copy()
+    output_alpha = source_alpha.copy()
+
+    if operation == "smart_cutout":
+        output_alpha = np.minimum(source_alpha, grabcut_alpha(bgr, feather))
+    elif operation == "logo_cutout":
+        output_alpha = np.minimum(source_alpha, logo_background_alpha(bgr, tolerance, feather))
+    elif operation == "background_blur":
+        subject_alpha = grabcut_alpha(bgr, feather).astype(np.float32) / 255.0
+        blur_size = bounded_int(round(strength / 2) * 2 + 1, 31, 9, 81)
+        if blur_size % 2 == 0:
+            blur_size += 1
+        blurred = cv2.GaussianBlur(bgr, (blur_size, blur_size), 0)
+        blend = subject_alpha[:, :, np.newaxis]
+        output_bgr = np.clip(bgr * blend + blurred * (1.0 - blend), 0, 255).astype(np.uint8)
+    elif operation == "auto_enhance":
+        lab = cv2.cvtColor(bgr, cv2.COLOR_BGR2LAB)
+        luminance, channel_a, channel_b = cv2.split(lab)
+        clip_limit = 1.3 + (strength / 100.0) * 2.2
+        enhanced_luminance = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=(8, 8)).apply(luminance)
+        output_bgr = cv2.cvtColor(cv2.merge((enhanced_luminance, channel_a, channel_b)), cv2.COLOR_LAB2BGR)
+    elif operation == "denoise":
+        denoise_strength = bounded_int(round(3 + strength * 0.12), 8, 3, 15)
+        output_bgr = cv2.fastNlMeansDenoisingColored(
+            bgr,
+            None,
+            denoise_strength,
+            denoise_strength,
+            7,
+            21,
+        )
+    elif operation == "sharpen":
+        amount = 0.35 + (strength / 100.0) * 1.4
+        blurred = cv2.GaussianBlur(bgr, (0, 0), 1.2)
+        output_bgr = cv2.addWeighted(bgr, 1.0 + amount, blurred, -amount, 0)
+    elif operation == "edge_sketch":
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        inverse = cv2.bitwise_not(gray)
+        blur_size = bounded_int(round(strength / 5) * 2 + 5, 25, 9, 45)
+        if blur_size % 2 == 0:
+            blur_size += 1
+        softened = cv2.GaussianBlur(inverse, (blur_size, blur_size), 0)
+        sketch = cv2.divide(gray, 255 - softened, scale=256)
+        output_bgr = cv2.cvtColor(sketch, cv2.COLOR_GRAY2BGR)
+
+    return np.dstack((output_bgr, output_alpha))
+
+
+def encode_png(image: np.ndarray) -> bytes:
+    success, encoded = cv2.imencode(".png", image, [cv2.IMWRITE_PNG_COMPRESSION, 4])
+    if not success:
+        raise ValueError("OpenCV could not encode the processed image.")
+    return encoded.tobytes()
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -70,9 +291,226 @@ def health():
     try:
         result = subprocess.run(["ffmpeg", "-version"], capture_output=True, text=True)
         version_line = result.stdout.splitlines()[0] if result.stdout else "unknown"
-        return jsonify({"status": "ok", "ffmpeg": version_line})
+        return jsonify({
+            "status": "ok",
+            "ffmpeg": version_line,
+            "opencv": cv2.__version__,
+            "opencv_operations": sorted(OPENCV_OPERATIONS),
+            "video_operations": ["bottom_right_app_name_watermark"],
+        })
     except Exception as e:
         return jsonify({"status": "error", "error": str(e)}), 500
+
+
+@app.post("/opencv/process")
+def opencv_process():
+    """Apply an OpenCV operation to an uploaded image and return a PNG."""
+    if "file" not in request.files:
+        return error("No image file provided")
+
+    operation = (request.form.get("operation") or "").strip().lower()
+    if operation not in OPENCV_OPERATIONS:
+        return error(
+            "Unsupported OpenCV operation. Choose one of: " + ", ".join(sorted(OPENCV_OPERATIONS))
+        )
+
+    tolerance = bounded_int(request.form.get("tolerance"), 32, 4, 150)
+    feather = bounded_int(request.form.get("feather"), 4, 0, 25)
+    strength = bounded_int(request.form.get("strength"), 50, 1, 100)
+
+    try:
+        image = decode_uploaded_image(request.files["file"])
+        processed = apply_opencv_operation(
+            image,
+            operation,
+            tolerance=tolerance,
+            feather=feather,
+            strength=strength,
+        )
+        payload = encode_png(processed)
+    except ValueError as exc:
+        return error(str(exc), 422)
+    except cv2.error:
+        app.logger.exception("OpenCV failed while processing %s", operation)
+        return error("OpenCV could not process this image.", 422)
+    except Exception:
+        app.logger.exception("Unexpected OpenCV image-processing failure")
+        return error("The image processor encountered an unexpected error.", 500)
+
+    height, width = processed.shape[:2]
+    filename = f"{Path(request.files['file'].filename or 'image').stem}_{operation}.png"
+    response = send_file(
+        BytesIO(payload),
+        mimetype="image/png",
+        as_attachment=False,
+        download_name=filename,
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Hive-Image-Operation"] = operation
+    response.headers["X-Hive-Image-Width"] = str(width)
+    response.headers["X-Hive-Image-Height"] = str(height)
+    return response
+
+
+@app.post("/video/watermark")
+def video_watermark():
+    """Package a video with an optional watermark and optional WebVTT subtitle tracks."""
+    if "file" not in request.files:
+        return error("No video file provided")
+
+    video = request.files["file"]
+    overlay = request.files.get("overlay")
+    subtitle_uploads = request.files.getlist("subtitles")[:16]
+    input_ext = (video.filename or "video.mp4").rsplit(".", 1)[-1].lower()
+
+    if input_ext not in ALLOWED_VIDEO_IN:
+        return error(f"Unsupported video input format: {input_ext}")
+    if overlay is None and not subtitle_uploads:
+        return error("No watermark or subtitle tracks were provided", 422)
+
+    try:
+        subtitle_metadata = json.loads(request.form.get("subtitle_metadata") or "[]")
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return error("Subtitle metadata is invalid", 422)
+    if not isinstance(subtitle_metadata, list):
+        return error("Subtitle metadata must be a list", 422)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, f"input.{input_ext}")
+        output_path = os.path.join(tmpdir, "packaged.mp4")
+        video.save(input_path)
+        source_duration = probe_media_duration(input_path)
+
+        args = ["-i", input_path]
+        overlay_index = None
+        if overlay is not None:
+            overlay_path = os.path.join(tmpdir, "watermark.png")
+            overlay.save(overlay_path)
+            try:
+                overlay_image = cv2.imread(overlay_path, cv2.IMREAD_UNCHANGED)
+                if overlay_image is None or overlay_image.ndim != 3 or overlay_image.shape[2] != 4:
+                    return error("The watermark overlay must be a transparent PNG", 422)
+            except cv2.error:
+                return error("The watermark overlay could not be decoded", 422)
+            overlay_index = 1
+            args += ["-i", overlay_path]
+
+        subtitle_input_indexes = []
+        for subtitle_number, subtitle in enumerate(subtitle_uploads):
+            subtitle_path = os.path.join(tmpdir, f"subtitle-{subtitle_number}.vtt")
+            subtitle.save(subtitle_path)
+            contents = Path(subtitle_path).read_text(encoding="utf-8", errors="replace")
+            if not contents.lstrip().startswith("WEBVTT") or "-->" not in contents:
+                return error(f"Subtitle track {subtitle_number + 1} is not valid WebVTT", 422)
+            subtitle_input_indexes.append(1 + (1 if overlay_index is not None else 0) + subtitle_number)
+            args += ["-i", subtitle_path]
+
+        if overlay_index is not None:
+            filter_graph = (
+                f"[{overlay_index}:v:0][0:v:0]scale2ref=w=main_w:h=main_h[watermark][base];"
+                "[base][watermark]overlay=0:0:format=auto:eof_action=repeat[branded]"
+            )
+            args += ["-filter_complex", filter_graph, "-map", "[branded]"]
+        else:
+            args += ["-map", "0:v:0"]
+
+        args += ["-map", "0:a?"]
+        for subtitle_index in subtitle_input_indexes:
+            args += ["-map", f"{subtitle_index}:0"]
+
+        args += [
+            "-map_metadata", "-1",
+            "-movflags", "+faststart",
+            "-max_muxing_queue_size", "1024",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-profile:v", "main",
+            "-level", "4.1",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "160k",
+        ]
+
+        if source_duration is not None:
+            args += ["-t", f"{source_duration:.6f}"]
+
+        if subtitle_input_indexes:
+            args += ["-c:s", "mov_text"]
+            default_assigned = False
+            for index in range(len(subtitle_input_indexes)):
+                metadata = subtitle_metadata[index] if index < len(subtitle_metadata) and isinstance(subtitle_metadata[index], dict) else {}
+                language = str(metadata.get("language") or "und")[:12]
+                label = str(metadata.get("label") or f"Subtitle {index + 1}")[:80]
+                is_default = bool(metadata.get("default")) and not default_assigned
+                default_assigned = default_assigned or is_default
+                args += [
+                    f"-metadata:s:s:{index}", f"language={language}",
+                    f"-metadata:s:s:{index}", f"title={label}",
+                    f"-disposition:s:{index}", "default" if is_default else "0",
+                ]
+            if not default_assigned:
+                args += ["-disposition:s:0", "default"]
+
+        args += ["-f", "mp4", output_path]
+        ok, stderr = run_ffmpeg(args, timeout=1800)
+
+        if not ok:
+            app.logger.error("Video packaging failed: %s", stderr)
+            return error("The video and subtitle tracks could not be packaged", 500)
+        if not os.path.isfile(output_path) or os.path.getsize(output_path) < 1024:
+            return error("The generated video output is incomplete", 500)
+
+        stem = Path(video.filename or "video").stem
+        response = send_file(
+            output_path,
+            mimetype="video/mp4",
+            as_attachment=True,
+            download_name=f"{stem}.mp4",
+        )
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["X-Hive-Video-Watermark"] = "bottom-right-app-name" if overlay is not None else "none"
+        response.headers["X-Hive-Subtitle-Tracks"] = str(len(subtitle_input_indexes))
+        return response
+
+
+@app.post("/subtitle/convert")
+def convert_subtitle():
+    """Convert a supported timed-caption file into browser-native WebVTT."""
+    if "file" not in request.files:
+        return error("No subtitle file provided")
+
+    upload = request.files["file"]
+    extension = Path(upload.filename or "").suffix.lower().lstrip(".")
+    if extension not in ALLOWED_SUBTITLE_IN:
+        return error("Unsupported subtitle format. Use VTT, SRT, ASS, SSA, SUB, SBV, TTML, or DFXP.", 422)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, f"input.{extension}")
+        output_path = os.path.join(tmpdir, "subtitle.vtt")
+        upload.save(input_path)
+
+        if os.path.getsize(input_path) > MAX_SUBTITLE_FILE_SIZE:
+            return error("Subtitle files must not exceed 2 MB.", 413)
+
+        ok, stderr = run_ffmpeg([
+            "-nostdin", "-hide_banner", "-loglevel", "error",
+            "-i", input_path,
+            "-map", "0:s:0?",
+            "-f", "webvtt",
+            output_path,
+        ], timeout=30)
+        if not ok or not os.path.isfile(output_path):
+            app.logger.info("Subtitle conversion rejected: %s", stderr[-500:])
+            return error("This subtitle could not be converted. Check that it contains valid timed captions.", 422)
+
+        contents = Path(output_path).read_text(encoding="utf-8", errors="replace")
+        if not contents.lstrip().startswith("WEBVTT") or "-->" not in contents:
+            return error("The converted subtitle does not contain valid WebVTT cues.", 422)
+
+        response = send_file(output_path, mimetype="text/vtt; charset=utf-8", as_attachment=True, download_name="subtitle.vtt")
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 @app.post("/convert")

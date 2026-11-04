@@ -28,3 +28,16 @@ config_dump.yml
 current_config.yml
 compose_config.yml
 compose_config*.yml
+
+# Upstream laraowl clone, kept locally. Committing it as a gitlink with no
+# .gitmodules entry gives clones an empty directory rather than the code.
+laraowl/
+
+# Generated Python bytecode
+__pycache__/
+*.py[cod]
+
+.video/
+
+__pycache__/
+*.pyc

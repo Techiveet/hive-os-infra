@@ -13,7 +13,7 @@
 		Referrer-Policy "strict-origin-when-cross-origin"
 
 		# Permissions policy
-		Permissions-Policy "geolocation=(), microphone=(), camera=()"
+		Permissions-Policy "geolocation=(), microphone=(self), camera=(self), display-capture=(self)"
 
 		# Content Security Policy (Next.js + Laravel).
 		# Wildcards are scoped to the platform root domain instead of "https://*"
@@ -29,31 +29,59 @@
 	}
 }
 
+# Laravel reads the client IP from X-Forwarded-For (config/trustedproxy.php).
+# Send it the IP resolved above instead of Caddy's default, which would name
+# the Cloudflare edge when proxied.
+(backend_upstream) {
+	# Prometheus scrapes /metrics over the Docker network; it is not public.
+	respond /metrics 404
+	reverse_proxy backend:8000 {
+		header_up X-Forwarded-For {client_ip}
+	}
+}
+
 {
-	admin :2019
+	# Admin API only on the container's loopback: any other container on the
+	# Docker network could otherwise rewrite the proxy config.
+	admin localhost:2019
+	# Resolve the real visitor IP. Requests arriving from Cloudflare's edge
+	# carry it in CF-Connecting-IP; from anywhere else the TCP peer is the
+	# client, and a spoofed header is ignored. Ranges: https://www.cloudflare.com/ips/
+	servers {
+		trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+		client_ip_headers CF-Connecting-IP
+	}
 	on_demand_tls {
 		ask http://backend:8000/api/internal/caddy/allow-domain
 	}
 }
 
-{$FRONTEND_DOMAIN} {
+# Cloudflare proxies techiveet.com in Flexible SSL mode: its edge reaches this
+# origin over plain HTTP. Each Hive address therefore also answers on http://
+# (an explicit http site stops Caddy's HTTP->HTTPS redirect, which would loop
+# behind Flexible). Caddy still obtains certificates for the https:// side,
+# so switching Cloudflare to Full (strict) later needs no change here.
+# X-Forwarded-Proto from Cloudflare is trusted (servers.trusted_proxies), so
+# the app still sees the visitor's https scheme.
+
+{$FRONTEND_DOMAIN}, http://{$FRONTEND_DOMAIN} {
 	import security
 	encode zstd gzip
 
 	handle /api/* {
-		reverse_proxy backend:8000
+		import backend_upstream
 	}
 
 	handle /sanctum/* {
-		reverse_proxy backend:8000
+		import backend_upstream
 	}
 
 	handle /storage/* {
-		reverse_proxy backend:8000
+		import backend_upstream
 	}
 
 	handle /tenancy/assets/* {
-		reverse_proxy backend:8000
+		import backend_upstream
 	}
 
 	handle {
@@ -61,22 +89,51 @@
 	}
 }
 
-{$BACKEND_DOMAIN} {
+{$BACKEND_DOMAIN}, http://{$BACKEND_DOMAIN} {
 	import security
 	encode zstd gzip
-	reverse_proxy backend:8000
+	import backend_upstream
 }
 
-{$REVERB_DOMAIN} {
+{$REVERB_DOMAIN}, http://{$REVERB_DOMAIN} {
 	import security
 	encode zstd gzip
-	reverse_proxy reverb:9000
+	reverse_proxy hive-reverb:9000
 }
 
-{$HORIZON_DOMAIN} {
+{$VIDEO_DOMAIN}, http://{$VIDEO_DOMAIN} {
 	import security
 	encode zstd gzip
-	reverse_proxy backend:8000
+	reverse_proxy video-media:7880
+}
+
+# Addresses from before the move to techiveet.com. Old links, bookmarks and
+# cached bundles are sent on to the current domains. Requires *_DOMAIN to be
+# set to the new domains, or these collide with the blocks above.
+hive.gulfingot.com {
+	redir https://{$FRONTEND_DOMAIN}{uri} 308
+}
+
+hive-backend.gulfingot.com {
+	redir https://{$BACKEND_DOMAIN}{uri} 308
+}
+
+hive-ws.gulfingot.com {
+	redir https://{$REVERB_DOMAIN}{uri} 308
+}
+
+hive-queue.gulfingot.com {
+	redir https://{$HORIZON_DOMAIN}{uri} 308
+}
+
+hive-video.gulfingot.com {
+	redir https://{$VIDEO_DOMAIN}{uri} 308
+}
+
+{$HORIZON_DOMAIN}, http://{$HORIZON_DOMAIN} {
+	import security
+	encode zstd gzip
+	import backend_upstream
 }
 
 # NOTE: Meilisearch, Grafana, rembg and gotenberg are intentionally NOT exposed
@@ -84,7 +141,7 @@
 # (*_INTERNAL_URL). Grafana/Meilisearch are reachable for ops via the
 # 127.0.0.1-bound host ports declared in docker-compose.prod.yml (use an SSH tunnel).
 
-https:// {
+https://, http://*.{$ROOT_DOMAIN} {
 	import security
 	tls {
 		on_demand
@@ -93,19 +150,19 @@ https:// {
 	encode zstd gzip
 
 	handle /api/* {
-		reverse_proxy backend:8000
+		import backend_upstream
 	}
 
 	handle /sanctum/* {
-		reverse_proxy backend:8000
+		import backend_upstream
 	}
 
 	handle /storage/* {
-		reverse_proxy backend:8000
+		import backend_upstream
 	}
 
 	handle /tenancy/assets/* {
-		reverse_proxy backend:8000
+		import backend_upstream
 	}
 
 	handle {

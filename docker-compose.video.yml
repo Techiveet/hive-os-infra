@@ -1,0 +1,4 @@
+# Compatibility entry point. Video services now belong to the main Hive stack.
+name: hive-os-infra
+include:
+  - docker-compose.yml

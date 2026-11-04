@@ -1,0 +1,409 @@
+groups:
+  - name: hive_frontend_and_monitoring_alerts
+    rules:
+      - alert: HiveFrontendDown
+        expr: probe_success{instance="http://frontend:3000"} == 0 or absent(probe_success{instance="http://frontend:3000"})
+        for: 1m
+        labels:
+          severity: critical
+          service: frontend
+          environment: production
+        annotations:
+          summary: "Hive frontend is unreachable or its probe is missing"
+      - alert: HiveMonitoringTargetDown
+        expr: up{job=~"cadvisor|postgres-exporter|redis-exporter|hive-backend|node-exporter|alertmanager|blackbox-http"} == 0
+        for: 2m
+        labels:
+          severity: warning
+          service: monitoring
+          environment: production
+        annotations:
+          summary: "Hive monitoring target is unavailable"
+      - alert: HiveFrontendMemoryHigh
+        expr: container_memory_working_set_bytes{name=~"frontend-z140.*"} / container_spec_memory_limit_bytes{name=~"frontend-z140.*"} > 0.85
+        for: 5m
+        labels:
+          severity: warning
+          service: frontend
+          environment: production
+        annotations:
+          summary: "Hive frontend exceeds 85% of its memory budget"
+      - alert: HiveFrontendMetricsMissing
+        expr: absent(container_memory_working_set_bytes{name=~"frontend-z140.*"})
+        for: 5m
+        labels:
+          severity: warning
+          service: monitoring
+          environment: production
+        annotations:
+          summary: "Hive frontend memory metrics are missing; scrape health alone is not coverage"
+      - alert: HiveFrontendRestarted
+        expr: changes(container_start_time_seconds{name=~"frontend-z140.*"}[30m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: frontend
+          environment: production
+        annotations:
+          summary: "Hive frontend restarted; investigate before recurring outages"
+  - name: hive_host_capacity_alerts
+    rules:
+      - alert: HiveHostDiskHigh
+        expr: 1 - node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} > 0.80
+        for: 15m
+        labels:
+          severity: warning
+          service: host
+          environment: production
+        annotations:
+          summary: "Hive OS host disk exceeds 80% usage"
+          description: "Review safe build cache cleanup and capacity. Never prune customer volumes or rollback backups."
+      - alert: HiveHostDiskCritical
+        expr: node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} < 3221225472
+        for: 5m
+        labels:
+          severity: critical
+          service: host
+          environment: production
+        annotations:
+          summary: "Hive OS host has less than 3 GiB disk available"
+          description: "Escalate capacity immediately; do not reset databases or delete object storage."
+  - name: hive_offsite_backup_alerts
+    rules:
+      - alert: HiveOffsiteBackupFailed
+        expr: hive_offsite_backup_last_run_success == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: backup
+          environment: production
+        annotations:
+          summary: "Hive OS encrypted cPanel backup failed"
+          description: "Inspect hive-cpanel-backup.service and its private diagnostics; do not reset production data."
+      - alert: HiveOffsiteBackupStale
+        expr: time() - hive_offsite_backup_last_success_timestamp_seconds > 108000 or absent(hive_offsite_backup_last_success_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: critical
+          service: backup
+          environment: production
+        annotations:
+          summary: "Hive OS offsite backup is missing or older than 30 hours"
+          description: "Check cPanel connectivity, the systemd backup timer, and the last successful repository snapshot."
+  # ==========================================
+  # 1. Application Performance & Error Alerts
+  # ==========================================
+  - name: hive_application_alerts
+    rules:
+      - alert: HiveBackendDown
+        expr: probe_success{instance="http://backend:8000/health/live"} == 0 or hive_backend_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backend
+          environment: production
+        annotations:
+          summary: "Hive Backend application process is unreachable"
+          description: "The core Laravel/RoadRunner HTTP backend process is failing liveness checks or unreachable."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#1-incident-severity-model--response-slas"
+
+      - alert: High5xxRate
+        expr: (sum(rate(hive_http_errors_total{status_class="5xx"}[5m])) / clamp_min(sum(rate(hive_http_requests_total[5m])), 0.001) > 0.01) and (sum(rate(hive_http_requests_total[5m])) > 0.05)
+        for: 2m
+        labels:
+          severity: warning
+          service: backend
+          environment: production
+        annotations:
+          summary: "Elevated 5xx Error Rate on Hive ERP (> 1% under active traffic)"
+          description: "5xx server error ratio exceeded 1% of total HTTP requests over 5 minutes."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#1-incident-severity-model--response-slas"
+
+      - alert: Critical5xxRate
+        expr: (sum(rate(hive_http_errors_total{status_class="5xx"}[2m])) / clamp_min(sum(rate(hive_http_requests_total[2m])), 0.001) > 0.05) and (sum(rate(hive_http_requests_total[2m])) > 0.05)
+        for: 1m
+        labels:
+          severity: critical
+          service: backend
+          environment: production
+        annotations:
+          summary: "Critical 5xx Error Rate on Hive ERP (> 5% under active traffic)"
+          description: "5xx server error ratio exceeded 5% of total HTTP requests over 2 minutes."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#1-incident-severity-model--response-slas"
+
+      - alert: ElevatedP95Latency
+        expr: histogram_quantile(0.95, sum(rate(hive_http_request_duration_seconds_bucket[5m])) by (le)) > 0.500
+        for: 2m
+        labels:
+          severity: warning
+          service: backend
+          environment: production
+        annotations:
+          summary: "Elevated p95 Latency on Hive ERP (> 500ms)"
+          description: "p95 API response time exceeded 500ms for more than 2 minutes."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#1-incident-severity-model--response-slas"
+
+      - alert: CriticalP95Latency
+        expr: histogram_quantile(0.95, sum(rate(hive_http_request_duration_seconds_bucket[2m])) by (le)) > 1.000
+        for: 1m
+        labels:
+          severity: critical
+          service: backend
+          environment: production
+        annotations:
+          summary: "Critical p95 Latency on Hive ERP (> 1.0s)"
+          description: "p95 API response time exceeded 1000ms for more than 1 minute."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#1-incident-severity-model--response-slas"
+
+  # ==========================================
+  # 2. Database & PostgreSQL Alerts
+  # ==========================================
+  - name: hive_database_alerts
+    rules:
+      - alert: PostgresDown
+        expr: hive_database_up == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: postgres
+          environment: production
+        annotations:
+          summary: "PostgreSQL Database is unreachable"
+          description: "Hive database connectivity probe failed."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#3-database-incident--lock-saturation-playbook"
+
+      - alert: PostgresConnectionsWarning
+        expr: (hive_database_connections_active / hive_database_connections_max) > 0.70
+        for: 2m
+        labels:
+          severity: warning
+          service: postgres
+          environment: production
+        annotations:
+          summary: "PostgreSQL connection pool near capacity (> 70%)"
+          description: "Active connections exceeded 70% of max pool limit."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#3-database-incident--lock-saturation-playbook"
+
+      - alert: PostgresConnectionsCritical
+        expr: (hive_database_connections_active / hive_database_connections_max) > 0.85
+        for: 1m
+        labels:
+          severity: critical
+          service: postgres
+          environment: production
+        annotations:
+          summary: "PostgreSQL connection pool critically saturated (> 85%)"
+          description: "Active connections exceeded 85% of max pool limit."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#3-database-incident--lock-saturation-playbook"
+
+      - alert: PostgresLockWaitHigh
+        expr: hive_database_locks_waiting > 0
+        for: 2m
+        labels:
+          severity: warning
+          service: postgres
+          environment: production
+        annotations:
+          summary: "PostgreSQL ungranted lock contention detected"
+          description: "One or more transactions are blocked waiting on exclusive row/table locks."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#3-database-incident--lock-saturation-playbook"
+
+  # ==========================================
+  # 3. Redis & Cache Alerts
+  # ==========================================
+  - name: hive_redis_alerts
+    rules:
+      - alert: RedisDown
+        expr: hive_redis_up == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: redis
+          environment: production
+        annotations:
+          summary: "Redis Cache & Queue Server is unreachable"
+          description: "Redis connectivity probe returned failure."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+      - alert: RedisMemoryHigh
+        expr: (hive_redis_memory_max_bytes > 0 and (hive_redis_memory_bytes / hive_redis_memory_max_bytes) > 0.85) or ((hive_redis_memory_max_bytes == 0 or absent(hive_redis_memory_max_bytes)) and hive_redis_memory_bytes > 536870912)
+        for: 5m
+        labels:
+          severity: warning
+          service: redis
+          environment: production
+        annotations:
+          summary: "Redis memory usage high (> 85% or > 512MB absolute limit)"
+          description: "Redis cache memory usage exceeded configured thresholds (safe against maxmemory=0)."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+  # ==========================================
+  # 4. Background Queues & Workers Alerts
+  # ==========================================
+  - name: hive_queue_alerts
+    rules:
+      - alert: QueueBacklogHigh
+        expr: hive_queue_pending_jobs > 500
+        for: 3m
+        labels:
+          severity: warning
+          service: queue
+          environment: production
+        annotations:
+          summary: "Queue backlog accumulating (> 500 pending jobs)"
+          description: "Pending jobs in background Redis queues exceeded 500 for 3 minutes."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+      - alert: QueueBacklogCritical
+        expr: hive_queue_pending_jobs > 1000
+        for: 1m
+        labels:
+          severity: critical
+          service: queue
+          environment: production
+        annotations:
+          summary: "Queue backlog critical (> 1000 pending jobs)"
+          description: "Pending jobs in background Redis queues exceeded 1000."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+      - alert: QueueOldestJobTooOld
+        expr: hive_queue_oldest_job_age_seconds > 300
+        for: 2m
+        labels:
+          severity: warning
+          service: queue
+          environment: production
+        annotations:
+          summary: "Queue oldest job age exceeded SLA (> 300s)"
+          description: "A background job has been waiting in queue longer than 5 minutes."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+      - alert: QueueFailedJobs
+        expr: hive_queue_failed_jobs > 10
+        for: 2m
+        labels:
+          severity: warning
+          service: queue
+          environment: production
+        annotations:
+          summary: "Multiple background jobs failed (> 10 failed jobs)"
+          description: "Failed jobs count in dead letter queue exceeded 10."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+  # ==========================================
+  # 5. Backup & Disaster Recovery Alerts
+  # ==========================================
+  - name: hive_backup_alerts
+    rules:
+      - alert: BackupFailed
+        expr: hive_backup_success == 0 or hive_backup_last_exit_code != 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backup
+          environment: production
+        annotations:
+          summary: "Automated database backup failed"
+          description: "Last scheduled database backup snapshot returned failure or non-zero exit code."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#4-database-corruption--isolated-recovery-workflow"
+
+      - alert: BackupTooOld
+        expr: hive_backup_age_seconds > 86400
+        for: 5m
+        labels:
+          severity: critical
+          service: backup
+          environment: production
+        annotations:
+          summary: "Database backup is stale (> 24 hours old)"
+          description: "No successful database backup snapshot has been created in over 24 hours."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#4-database-corruption--isolated-recovery-workflow"
+
+      - alert: BackupChecksumInvalid
+        expr: hive_backup_checksum_valid == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backup
+          environment: production
+        annotations:
+          summary: "Database backup checksum integrity verification failed"
+          description: "Backup snapshot SHA-256 digest does not match recorded digest."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#4-database-corruption--isolated-recovery-workflow"
+
+      - alert: RestoreValidationOverdue
+        expr: hive_restore_validation_age_seconds > 7776000
+        for: 1h
+        labels:
+          severity: warning
+          service: backup
+          environment: production
+        annotations:
+          summary: "Disaster Recovery isolated restore validation drill overdue (> 90 days)"
+          description: "No isolated restore drill has been completed within the required quarterly SLA."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#4-database-corruption--isolated-recovery-workflow"
+
+      - alert: WALArchiveLag
+        expr: hive_postgres_wal_archive_age_seconds > 60
+        for: 2m
+        labels:
+          severity: warning
+          service: backup
+          environment: production
+        annotations:
+          summary: "PostgreSQL WAL Archival Lag exceeded 60s target RPO"
+          description: "WAL archival delay is currently above 60 seconds."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#4-database-corruption--isolated-recovery-workflow"
+
+      - alert: WALArchiveLagCritical
+        expr: hive_postgres_wal_archive_age_seconds > 300 or increase(hive_postgres_wal_failed_count[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+          service: backup
+          environment: production
+        annotations:
+          summary: "PostgreSQL WAL Archival critically lagging or new archival failures detected"
+          description: "WAL archival delay exceeded 300s (5m) or new failed WAL archiving attempts were detected in the last 5 minutes."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#4-database-corruption--isolated-recovery-workflow"
+
+  # ==========================================
+  # 6. Auxiliary Subsystems (Degraded-Mode Aware)
+  # ==========================================
+  - name: hive_auxiliary_alerts
+    rules:
+      - alert: MeilisearchDown
+        expr: hive_meilisearch_up == 0
+        for: 1m
+        labels:
+          severity: warning
+          service: search
+          environment: production
+        annotations:
+          summary: "Meilisearch search engine is unavailable"
+          description: "Search service is down; Hive ERP is operating in degraded direct-database mode."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+      - alert: ReverbDown
+        expr: hive_reverb_up == 0
+        for: 1m
+        labels:
+          severity: warning
+          service: reverb
+          environment: production
+        annotations:
+          summary: "Laravel Reverb WebSocket server is unavailable"
+          description: "Real-time WebSocket events are offline; frontend falls back to standard HTTP polling."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"
+
+      - alert: ObjectStorageDown
+        expr: hive_object_storage_up == 0
+        for: 1m
+        labels:
+          severity: warning
+          service: storage
+          environment: production
+        annotations:
+          summary: "SeaweedFS Object Storage is unavailable"
+          description: "Document/image uploads are temporarily offline."
+          runbook_url: "docs/PRODUCTION_INCIDENT_RESPONSE_RUNBOOK.md#2-command-safety-classification"

@@ -1,0 +1,11 @@
+# Public widget branding footer
+
+Frontend source: `aa3212d1c366c604815e63cdb86d51f3d97a01de`, based on the deployed sound-notification revision `c2b3c2f2743a495d01becd2edf3dd76ab64cbe63`.
+
+The public support widget displays a fixed footer beneath its composer: **Powered by HIVE.OS**, linking to `https://hive.techiveet.com` in a new tab with `noopener noreferrer`. The link is underlined, has a 44px minimum target height and visible keyboard focus in both themes, and announces the new-tab behavior to screen readers. The transcript remains the scrollable flex child above the composer and footer.
+
+`widget-footer.patch` is the exact source delta. The build uses the retained source context for revision `c2b3c2f`, prepared as documented in `../support-message-alerts-20261018/README.md`. Use the included external Dockerfile with a named context `branding` containing the final committed `components/support-bot/support-webchat-widget.tsx`. Its first builder stage reuses the previous verified cache; the branding stage copies that one file and runs the same constrained Webpack build. The final image copies the branding stage output and is labelled with the final source revision. No private values are included in this recipe.
+
+Targeted ESLint and complete TypeScript checks passed. The six foreground/background and focus combinations in `contrast.json` passed the accessibility contrast script with zero failures. Live production verification passed: the footer appears beneath the composer; Tab focuses the native link; Enter and mouse activation open HIVE.OS in a new tab while preserving the chat. The target loaded the public Enterprise Operations homepage. The link's rendered height is 44px, its destination is `https://hive.techiveet.com`, and `target=_blank` with `rel=noopener noreferrer` was verified in the live DOM.
+
+The deployed image is `sha256:1579c49942c3562ea71f53c81e7fee1a73b18e8ca4abb195dd3ac1ec58f5c447`, labelled with the source revision above. The frontend became healthy and Hive `/health` returned `ok`; 63 other Hive-host containers and 35 unrelated EV containers retained their IDs. The completed task-specific EV builder was stopped. Previous application images and private pre-release Compose configuration remain available for rollback.

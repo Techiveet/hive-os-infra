@@ -1,0 +1,550 @@
+diff --git a/components/dashboard/topbar-notifications.tsx b/components/dashboard/topbar-notifications.tsx
+index 7c8abde1..c247a9f4 100644
+--- a/components/dashboard/topbar-notifications.tsx
++++ b/components/dashboard/topbar-notifications.tsx
+@@ -1,6 +1,6 @@
+ "use client";
+ 
+-import React, { useEffect, useState } from "react";
++import React, { useEffect, useRef, useState } from "react";
+ import Link from "next/link";
+ import { useRouter, usePathname } from "next/navigation";
+ import { useQuery, useQueryClient } from "@tanstack/react-query";
+@@ -14,9 +14,12 @@ import {
+   AlertCircle,
+   ClipboardCheck,
+   Database,
++  Volume2,
++  VolumeX,
+ } from "lucide-react";
+ import { formatDistanceToNow } from "date-fns";
+ import { toast } from "sonner";
++import { useMessageSound } from "@/hooks/use-message-sound";
+ import { cn } from "@/lib/utils";
+ import { getAccessToken } from "@/lib/runtime-context";
+ import { getUserNotificationChannelNames, initEcho } from "@/lib/echo";
+@@ -100,6 +103,7 @@ function normalizeIncomingNotification(
+ 
+ function categoryIcon(category: string) {
+   switch (category) {
++    case "support_chat":
+     case "chat":
+       return MessageSquare;
+     case "mail":
+@@ -117,6 +121,7 @@ function categoryIcon(category: string) {
+ 
+ function categoryTone(category: string) {
+   switch (category) {
++    case "support_chat":
+     case "chat":
+       return "bg-blue-50 border-blue-100 text-blue-600";
+     case "mail":
+@@ -142,6 +147,13 @@ export function TopbarNotificationsIcon({
+   const router = useRouter();
+   const queryClient = useQueryClient();
+   const [isOpen, setIsOpen] = useState(false);
++  const messageSound = useMessageSound(`staff:${activeUser?.id ?? "guest"}`);
++  const observed = useRef<Set<string> | null>(null);
++  const listeningSince = useRef(Date.now());
++  useEffect(() => {
++    observed.current = null;
++    listeningSince.current = Date.now();
++  }, [activeUser?.id]);
+ 
+   const {
+     data: notificationCenter,
+@@ -162,6 +174,20 @@ export function TopbarNotificationsIcon({
+     (item) => !item.read_at,
+   );
+   const pathname = usePathname();
++  useEffect(() => {
++    if (!isFetched) return;
++    const items = notificationCenter?.data?.notifications ?? [];
++    if (observed.current === null) {
++      observed.current = new Set(items.map((item) => item.id));
++      return;
++    }
++    for (const item of items) {
++      if (observed.current.has(item.id)) continue;
++      observed.current.add(item.id);
++      if (item.category === "support_chat" && !item.read_at &&
++          Date.parse(item.created_at ?? "") >= listeningSince.current) messageSound.play(item.id);
++    }
++  }, [isFetched, notificationCenter, messageSound.play]);
+ 
+   useEffect(() => {
+     if (!activeUser?.id) return;
+@@ -188,6 +214,7 @@ export function TopbarNotificationsIcon({
+           return;
+         }
+         seenNotificationIds.add(incoming.id);
++        if (incoming.category === "support_chat") messageSound.play(incoming.id);
+ 
+         // Only patch the cache after the first server fetch so login badge stays accurate.
+         queryClient.setQueryData<NotificationCenterResponse | undefined>(
+@@ -270,7 +297,7 @@ export function TopbarNotificationsIcon({
+     } catch (error) {
+       console.log("Echo notification initialization failed", error);
+     }
+-  }, [activeUser?.id, queryClient, pathname, router]);
++  }, [activeUser?.id, queryClient, pathname, router, messageSound.play]);
+ 
+   const applyReadState = (unread_count: number, removedIds: string[]) => {
+     queryClient.setQueryData<NotificationCenterResponse | undefined>(
+@@ -317,7 +344,9 @@ export function TopbarNotificationsIcon({
+     setIsOpen(false);
+     // Navigate first; detail page also marks read. Still remove from panel immediately.
+     void markAsRead(notification.id);
+-    router.push(notificationDetailPath(notification.id));
++    router.push(notification.category === "support_chat" && notification.url
++      ? notification.url
++      : notificationDetailPath(notification.id));
+   };
+ 
+   const badgeCount = isFetched ? unreadCount : null;
+@@ -328,9 +357,10 @@ export function TopbarNotificationsIcon({
+         <Button
+           id="tour-topbar-notifications"
+           variant="ghost"
+-          className="relative h-10 w-10 rounded-xl p-0 shrink-0 text-muted-foreground hover:text-foreground"
++          aria-label={`Notifications, ${unreadCount} unread`}
++          className="relative h-11 w-11 rounded-xl p-0 shrink-0 text-muted-foreground hover:text-foreground"
+         >
+-          <Bell className="h-5 w-5" />
++          <Bell className="h-5 w-5" aria-hidden="true" />
+           {badgeCount !== null ? (
+             <span
+               className={`absolute -top-1 -right-1 flex min-w-[18px] h-[18px] items-center justify-center rounded-full px-1 text-[11px] font-black text-white shadow-sm transition-colors ${
+@@ -372,6 +402,18 @@ export function TopbarNotificationsIcon({
+           </div>
+         </div>
+ 
++        <div className="flex items-center justify-between gap-2 border-b px-4 py-1">
++          <span className="text-xs text-muted-foreground">Support message sounds</span>
++          <button
++            type="button"
++            onClick={messageSound.toggle}
++            aria-label={messageSound.enabled ? "Mute support message sounds" : "Enable support message sounds"}
++            title={messageSound.enabled ? "Mute support message sounds" : "Enable support message sounds"}
++            className="flex h-11 w-11 items-center justify-center rounded-md bg-white text-slate-700 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-700 dark:bg-slate-950 dark:text-slate-200 dark:hover:bg-slate-800 dark:focus-visible:outline-sky-300"
++          >
++            {messageSound.enabled ? <Volume2 className="h-5 w-5" aria-hidden="true" /> : <VolumeX className="h-5 w-5" aria-hidden="true" />}
++          </button>
++        </div>
+         <div className="flex max-h-[360px] flex-col overflow-y-auto">
+           {isLoading ? (
+             <div className="flex justify-center items-center py-8 text-muted-foreground">
+diff --git a/components/support-bot/support-webchat-widget.tsx b/components/support-bot/support-webchat-widget.tsx
+index 56a9b24f..8198449e 100644
+--- a/components/support-bot/support-webchat-widget.tsx
++++ b/components/support-bot/support-webchat-widget.tsx
+@@ -11,6 +11,8 @@ import {
+   Send,
+   ThumbsDown,
+   ThumbsUp,
++  Volume2,
++  VolumeX,
+   X,
+ } from "lucide-react";
+ 
+@@ -25,6 +27,7 @@ import {
+ } from "@/components/support-bot/queen-bee";
+ import api from "@/modules/shared/api/http";
+ import { getSupportBotThreadChannelName, initPublicEcho } from "@/lib/echo";
++import { useMessageSound } from "@/hooks/use-message-sound";
+ import { useDictation } from "@/hooks/use-dictation";
+ import { useWidgetDrag } from "@/hooks/use-widget-drag";
+ 
+@@ -186,6 +189,8 @@ export function SupportWebchatWidget({
+   onReady,
+ }: SupportWebchatWidgetProps) {
+   const [isOpen, setIsOpen] = useState(false);
++  const messageSound = useMessageSound(`visitor:${botSlug}`);
++  const receivedIds = useRef(new Set<string>());
+   const [config, setConfig] = useState<WidgetConfig | null>(null);
+   const [sessionId, setSessionId] = useState("");
+   const [messages, setMessages] = useState<WidgetMessage[]>([]);
+@@ -520,6 +525,8 @@ export function SupportWebchatWidget({
+       setUnavailable(false);
+ 
+       const history: WidgetMessage[] = session.messages ?? [];
++      receivedIds.current = new Set(history.map(getMessageKey));
++      receivedIds.current.add("bot:greeting");
+ 
+       setMessages(
+         history.length > 0
+@@ -586,6 +593,24 @@ export function SupportWebchatWidget({
+     openConversation,
+   ]);
+ 
++  // History is seeded before rendering; only newly received stored replies alert.
++  // Merging by stable IDs also prevents a socket/poll race from playing twice.
++  useEffect(() => {
++    let unseen = 0;
++    for (const message of messages) {
++      const key = getMessageKey(message);
++      if (receivedIds.current.has(key)) continue;
++      receivedIds.current.add(key);
++      if (!/^\d+$/.test(String(message.id)) || !["bot", "agent"].includes(message.sender_type)) continue;
++      messageSound.play(String(message.id));
++      if (!isOpenRef.current) {
++        unseen++;
++        notifyOfReply(message.sender_name);
++      }
++    }
++    if (unseen) setUnread((count) => count + unseen);
++  }, [messages, messageSound.play]);
++
+   // Live delivery of an agent's reply. The channel is public because the
+   // visitor has no account to authorise a private one — its name is a
+   // server-issued secret, and only this browser and the server hold it.
+@@ -621,13 +646,6 @@ export function SupportWebchatWidget({
+         ]),
+       );
+ 
+-      // Announce it if they are not looking. `isOpenRef` rather than `isOpen`
+-      // because this closure is created once per stream token and would
+-      // otherwise keep testing whatever the panel state was at subscribe time.
+-      if (!isOpenRef.current) {
+-        setUnread((count) => count + 1);
+-        notifyOfReply(event?.sender_name);
+-      }
+     });
+ 
+     channel.listen(".support-bot.escalated", () => setWithAgent(true));
+@@ -654,11 +672,11 @@ export function SupportWebchatWidget({
+ 
+   // Realtime is the fast path; token-bound polling recovers missed replies.
+   useEffect(() => {
+-    if (!isOpen || !withAgent || !sessionId || !sessionToken) return;
++    if (!withAgent || !sessionId || !sessionToken) return;
+     let cancelled = false;
+     let pending = false;
+     const load = async () => {
+-      if (pending || document.visibilityState === "hidden") return;
++      if (pending) return;
+       pending = true;
+       try {
+         const response = await api.post(
+@@ -702,7 +720,7 @@ export function SupportWebchatWidget({
+       cancelled = true;
+       window.clearInterval(timer);
+     };
+-  }, [isOpen, withAgent, sessionId, sessionToken, botSlug]);
++  }, [withAgent, sessionId, sessionToken, botSlug]);
+ 
+   const requestHuman = () => {
+     if (escalating || !sessionId || !sessionToken) return;
+@@ -901,7 +919,9 @@ export function SupportWebchatWidget({
+     setSessionToken("");
+     setStreamToken(null);
+     setWithAgent(false);
++    receivedIds.current.clear();
+     setMessages([]);
++    setUnread(0);
+     setUnavailable(false);
+     try {
+       localStorage.removeItem(sessionStorageKey);
+@@ -1073,6 +1093,15 @@ export function SupportWebchatWidget({
+           </div>
+         </div>
+         <div className="relative flex items-center gap-0.5">
++          <button
++            type="button"
++            onClick={messageSound.toggle}
++            title={messageSound.enabled ? "Mute message sounds" : "Enable message sounds"}
++            aria-label={messageSound.enabled ? "Mute message sounds" : "Enable message sounds"}
++            className="flex h-11 w-11 items-center justify-center rounded-lg transition hover:bg-white/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-current"
++          >
++            {messageSound.enabled ? <Volume2 className="h-4 w-4" aria-hidden="true" /> : <VolumeX className="h-4 w-4" aria-hidden="true" />}
++          </button>
+           <button
+             type="button"
+             onClick={reset}
+diff --git a/hooks/use-message-sound.ts b/hooks/use-message-sound.ts
+new file mode 100644
+index 00000000..3e0b420f
+--- /dev/null
++++ b/hooks/use-message-sound.ts
+@@ -0,0 +1,41 @@
++"use client";
++
++import { useCallback, useEffect, useRef, useState } from "react";
++import { playMessageSound, unlockMessageSound } from "@/lib/message-sound";
++
++export function useMessageSound(scope: string) {
++  const [enabled, setEnabled] = useState(true);
++  const enabledRef = useRef(true);
++  const storageKey = `hive-message-sound:${scope}`;
++  useEffect(() => {
++    const load = () => {
++      try {
++        enabledRef.current = localStorage.getItem(storageKey) !== "muted";
++        setEnabled(enabledRef.current);
++      } catch { /* A private browser can keep the preference in memory. */ }
++    };
++    load();
++    const unlock = (event: Event) => {
++      if (event.isTrusted && enabledRef.current) unlockMessageSound();
++    };
++    window.addEventListener("pointerdown", unlock, true);
++    window.addEventListener("keydown", unlock, true);
++    window.addEventListener("storage", load);
++    return () => {
++      window.removeEventListener("pointerdown", unlock, true);
++      window.removeEventListener("keydown", unlock, true);
++      window.removeEventListener("storage", load);
++    };
++  }, [storageKey]);
++  const toggle = () => {
++    const next = !enabledRef.current;
++    enabledRef.current = next;
++    setEnabled(next);
++    try { localStorage.setItem(storageKey, next ? "enabled" : "muted"); } catch { /* In-memory fallback. */ }
++    if (next) unlockMessageSound();
++  };
++  const play = useCallback((id: string) => {
++    if (enabledRef.current) playMessageSound(`${scope}:${id}`);
++  }, [scope]);
++  return { enabled, toggle, play };
++}
+diff --git a/lib/message-sound.ts b/lib/message-sound.ts
+new file mode 100644
+index 00000000..ddb4287d
+--- /dev/null
++++ b/lib/message-sound.ts
+@@ -0,0 +1,39 @@
++/** One short chime per received message, shared by websocket and poll delivery. */
++let audio: AudioContext | null = null;
++let lastPlayed = 0;
++const seen = new Set<string>();
++
++export function unlockMessageSound(): void {
++  try {
++    audio ??= new AudioContext();
++    if (audio.state === "suspended") void audio.resume().catch(() => {});
++  } catch {
++    // Browsers without Web Audio still receive visual notifications.
++  }
++}
++
++export function playMessageSound(key: string): void {
++  if (seen.has(key)) return;
++  seen.add(key);
++  if (seen.size > 512) seen.delete(seen.values().next().value!);
++  if (!audio || audio.state !== "running" || Date.now() - lastPlayed < 800) return;
++  lastPlayed = Date.now();
++  try {
++    const start = audio.currentTime;
++    const oscillator = audio.createOscillator();
++    const volume = audio.createGain();
++    oscillator.type = "sine";
++    oscillator.frequency.setValueAtTime(740, start);
++    oscillator.frequency.setValueAtTime(988, start + 0.09);
++    volume.gain.setValueAtTime(0, start);
++    volume.gain.linearRampToValueAtTime(0.08, start + 0.015);
++    volume.gain.exponentialRampToValueAtTime(0.001, start + 0.24);
++    oscillator.connect(volume);
++    volume.connect(audio.destination);
++    oscillator.start(start);
++    oscillator.stop(start + 0.25);
++    oscillator.onended = () => { oscillator.disconnect(); volume.disconnect(); };
++  } catch {
++    // A suspended audio device must not interrupt chat delivery.
++  }
++}
+diff --git a/modules/support-bot/components/live-inbox/live-support-inbox.tsx b/modules/support-bot/components/live-inbox/live-support-inbox.tsx
+index 4e2ac6c4..b6f96e33 100644
+--- a/modules/support-bot/components/live-inbox/live-support-inbox.tsx
++++ b/modules/support-bot/components/live-inbox/live-support-inbox.tsx
+@@ -1,6 +1,7 @@
+ "use client";
+ 
+ import * as React from "react";
++import { useSearchParams } from "next/navigation";
+ import {
+   Headphones,
+   User,
+@@ -35,16 +36,23 @@ interface Props {
+ }
+ 
+ export function LiveSupportInbox({ bot }: Props) {
++  const requestedConversation = Number(useSearchParams().get("conversation")) || null;
+   const [conversations, setConversations] = React.useState<
+     SupportBotConversation[]
+   >([]);
+   const [selectedConvId, setSelectedConvId] = React.useState<number | null>(
+-    null,
++    requestedConversation,
+   );
+   const [activeConv, setActiveConv] =
+     React.useState<SupportBotConversation | null>(null);
+   const [loading, setLoading] = React.useState(true);
+-  const [statusFilter, setStatusFilter] = React.useState<string>("escalated");
++  const [statusFilter, setStatusFilter] = React.useState<string>(requestedConversation ? "all" : "escalated");
++  React.useEffect(() => {
++    if (requestedConversation) {
++      setSelectedConvId(requestedConversation);
++      setStatusFilter("all");
++    }
++  }, [requestedConversation]);
+   const [searchQuery, setSearchQuery] = React.useState("");
+   const [replyText, setReplyText] = React.useState("");
+   const [visitorTyping, setVisitorTyping] = React.useState(false);
+@@ -55,24 +63,6 @@ export function LiveSupportInbox({ bot }: Props) {
+   const typingTimerRef = React.useRef<number | null>(null);
+   const typingSentAtRef = React.useRef(0);
+ 
+-  /**
+-   * A desktop notification, only if the agent has already granted permission.
+-   * Never prompts: an inbox that demands notification access the first time a
+-   * visitor appears is one agents turn off.
+-   */
+-  const notifyAgent = (title: string, body?: string) => {
+-    try {
+-      if (
+-        typeof Notification !== "undefined" &&
+-        Notification.permission === "granted"
+-      ) {
+-        new Notification(title, { body, tag: "support-bot-inbox" });
+-      }
+-    } catch {
+-      // The toast already carried the message.
+-    }
+-  };
+-
+   /** Lets the visitor see that a person is composing. Throttled. */
+   const pingTyping = (conversationId: number) => {
+     const now = Date.now();
+@@ -100,7 +90,7 @@ export function LiveSupportInbox({ bot }: Props) {
+         setConversations(list);
+ 
+         setSelectedConvId((current) =>
+-          list.some((item: SupportBotConversation) => item.id === current)
++          current === requestedConversation || list.some((item: SupportBotConversation) => item.id === current)
+             ? current
+             : (list[0]?.id ?? null),
+         );
+@@ -111,7 +101,7 @@ export function LiveSupportInbox({ bot }: Props) {
+         if (!quiet) setLoading(false);
+       }
+     },
+-    [bot.id, statusFilter],
++    [bot.id, statusFilter, requestedConversation],
+   );
+ 
+   React.useEffect(() => {
+@@ -209,35 +199,19 @@ export function LiveSupportInbox({ bot }: Props) {
+       }) => {
+         loadConversations();
+ 
+-        // Someone is waiting *now*. Naming them turns a generic ping into
+-        // something an agent can act on without opening anything first.
+-        const who = event.visitor_name || event.visitor_email || "A visitor";
+-
+-        toast.info(`${who} would like to talk to a person`, {
+-          description: event.visitor_email ?? "Waiting in the support queue",
+-          duration: 10000,
+-          action: {
+-            label: "Open",
+-            onClick: () => setSelectedConvId(event.conversation_id),
+-          },
+-        });
+ 
+-        void notifyAgent(
+-          `${who} wants to talk to a person`,
+-          event.visitor_email ?? undefined,
+-        );
+       },
+     );
+ 
+     channel.listen(
+       ".support-bot.message",
+-      (event: { conversation_id: number }) => {
++      (event: { conversation_id: number; sender_type?: string }) => {
+         void refreshOpenConversation(event.conversation_id);
+         loadConversations();
+ 
+         // Anything arriving in a conversation the agent is not currently reading
+         // is unread until they open it.
+-        if (selectedConvIdRef.current !== event.conversation_id) {
++        if (event.sender_type === "visitor" && selectedConvIdRef.current !== event.conversation_id) {
+           setUnreadByConversation((current) => ({
+             ...current,
+             [event.conversation_id]: (current[event.conversation_id] ?? 0) + 1,
+@@ -264,7 +238,9 @@ export function LiveSupportInbox({ bot }: Props) {
+     );
+ 
+     return () => {
+-      echo?.leave(channelName);
++      channel.stopListening(".support-bot.escalated");
++      channel.stopListening(".support-bot.message");
++      channel.stopListening(".support-bot.typing");
+     };
+   }, [bot.id]);
+ 
+diff --git a/public/sw.js b/public/sw.js
+index d4922752..ab4af8f5 100644
+--- a/public/sw.js
++++ b/public/sw.js
+@@ -33,6 +33,12 @@ self.addEventListener("fetch", (event) => {
+   const { request } = event;
+   const url = new URL(request.url);
+ 
++  // Public chat must use its own live page, never the ERP's cached sign-in
++  // fallback. The cached shell can carry a same-origin framing policy.
++  if (url.pathname === "/embed/support-bot" || url.pathname.startsWith("/embed/support-bot/")) {
++    return;
++  }
++
+   // 1. Skip non-GET requests (handled by Axios/Fetch mutation queue)
+   if (request.method !== "GET") {
+     return;
+diff --git a/tests/message-sound.test.ts b/tests/message-sound.test.ts
+new file mode 100644
+index 00000000..37a9497d
+--- /dev/null
++++ b/tests/message-sound.test.ts
+@@ -0,0 +1,42 @@
++import assert from "node:assert/strict";
++import { playMessageSound, unlockMessageSound } from "../lib/message-sound";
++
++let starts = 0;
++let clock = 10000;
++const originalNow = Date.now;
++Date.now = () => clock;
++class TestAudioContext {
++  state = "running";
++  currentTime = 0;
++  destination = {};
++  resume() { return Promise.resolve(); }
++  createOscillator() {
++    return { type: "", frequency: { setValueAtTime() {} }, connect() {}, disconnect() {}, start() { starts++; }, stop() {}, onended: null };
++  }
++  createGain() {
++    return { gain: { setValueAtTime() {}, linearRampToValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, disconnect() {} };
++  }
++}
++Object.assign(globalThis, { AudioContext: TestAudioContext });
++try {
++  playMessageSound("before-interaction");
++  assert.equal(starts, 0, "Never create or play audio before user interaction");
++  unlockMessageSound();
++  playMessageSound("visitor:reply-1");
++  assert.equal(starts, 1);
++  clock += 1000;
++  playMessageSound("visitor:reply-1");
++  assert.equal(starts, 1, "Socket + poll duplicate must not replay a chime");
++  playMessageSound("staff:notification-1");
++  assert.equal(starts, 2, "A separate received message plays");
++  playMessageSound("staff:burst-message");
++  assert.equal(starts, 2, "Burst delivery is rate limited");
++  clock += 1000;
++  playMessageSound("staff:burst-message");
++  assert.equal(starts, 2, "Suppressed burst must not replay later");
++  playMessageSound("visitor:reply-2");
++  assert.equal(starts, 3);
++  console.log("PASS: gesture gate, received-message sound, duplicate and burst protection");
++} finally {
++  Date.now = originalNow;
++}

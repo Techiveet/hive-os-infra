@@ -4,6 +4,8 @@ services:
     image: redis:alpine
     container_name: hive-redis
     restart: unless-stopped
+    ports:
+      - "127.0.0.1:${REDIS_HOST_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -17,8 +19,13 @@ services:
     image: postgres:17-alpine
     container_name: hive-db
     restart: unless-stopped
+    # RefreshDatabase drops every table in one statement, which takes a lock
+    # per table, index and sequence. The default of 64 runs out of shared
+    # memory ("increase max_locks_per_transaction") once the module schema
+    # grows, failing every Hospitality suite in CI.
+    command: ["postgres", "-c", "max_locks_per_transaction=512"]
     ports:
-      - "5439:5432"
+      - "127.0.0.1:5439:5432"
     environment:
       POSTGRES_DB: hive
       POSTGRES_USER: hive
@@ -31,7 +38,9 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - hive-network
+      hive-network:
+        aliases:
+          - pgsql
 
   # 3. SEARCH (Meilisearch)
   meilisearch:
@@ -39,9 +48,9 @@ services:
     container_name: hive-search
     restart: unless-stopped
     ports:
-      - "7700:7700"
+      - "127.0.0.1:${MEILISEARCH_HOST_PORT:-7701}:7700"
     environment:
-      - MEILI_MASTER_KEY=masterKey
+      - MEILI_MASTER_KEY=${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       - MEILI_NO_ANALYTICS=true
     volumes:
       - hive-search-data:/meili_data
@@ -59,8 +68,8 @@ services:
     container_name: hive-mailpit
     restart: unless-stopped
     ports:
-      - "1025:1025" # SMTP Port
-      - "8025:8025" # Web Dashboard Port
+      - "127.0.0.1:11025:1025" # SMTP Port
+      - "127.0.0.1:8085:8025" # Web Dashboard Port
     networks:
       - hive-network
 
@@ -72,9 +81,9 @@ services:
       - ai
     restart: unless-stopped
     # Add the host and port flags to force it to listen externally
-    command: s --host 0.0.0.0 --port 5000 
+    command: s --host 0.0.0.0 --port 5000
     ports:
-      - "5000:5000"
+      - "127.0.0.1:${REMBG_HOST_PORT:-15001}:5000"
     networks:
       - hive-network
 
@@ -85,9 +94,9 @@ services:
     restart: unless-stopped
     command: server -dir=/data -s3
     ports:
-      - "${SEAWEEDFS_S3_HOST_PORT:-8333}:8333"
-      - "${SEAWEEDFS_FILER_HOST_PORT:-8888}:8888"
-      - "${SEAWEEDFS_MASTER_HOST_PORT:-9333}:9333"
+      - "127.0.0.1:${SEAWEEDFS_S3_HOST_PORT:-8333}:8333"
+      - "127.0.0.1:${SEAWEEDFS_FILER_HOST_PORT:-8888}:8888"
+      - "127.0.0.1:${SEAWEEDFS_MASTER_HOST_PORT:-9333}:9333"
     environment:
       AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-seaweedfs}
       AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-change-this-seaweedfs-secret}
@@ -97,7 +106,13 @@ services:
       - hive-network
 
   seaweedfs-bootstrap:
-    image: quay.io/minio/mc:latest
+    # Pin mc in a small Alpine image that still has /bin/sh. The official
+    # quay.io/minio/mc image is often scratch-based, so the shell entrypoint
+    # below (wait-for S3 + create bucket) cannot run on :latest.
+    build:
+      context: ./seaweedfs-bootstrap
+      dockerfile: Dockerfile
+    image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-seaweedfs-bootstrap
     depends_on:
       seaweedfs:
@@ -123,7 +138,7 @@ services:
       - storage-ui
     restart: unless-stopped
     ports:
-      - "${SEAWEEDFS_BROWSER_HOST_PORT:-9091}:8080"
+      - "127.0.0.1:${SEAWEEDFS_BROWSER_HOST_PORT:-9091}:8080"
     environment:
       ENDPOINT: seaweedfs:8333
       REGION: us-east-1
@@ -141,21 +156,31 @@ services:
     networks:
       - hive-network
 
-  # 7. THE BRAIN (Laravel 12 + Octane)
+  # 7. THE BRAIN (Laravel 13 + Octane)
   backend:
     build:
       context: ../hive-os-backend
       dockerfile: Dockerfile
     container_name: hive-backend
     restart: unless-stopped
+    # Rebuild the Laradocs search index on boot (see ../hive-os-backend/docker/entrypoint.sh)
+    # so a Docker restart never leaves /hivedocs search empty. Matches the image
+    # ENTRYPOINT in ../hive-os-backend/Dockerfile; overridden here so the live
+    # stack gets it without an image rebuild.
+    # WSL bind mounts don't honor the exec bit, so run the script via sh.
+    entrypoint: ["sh", "/var/www/html/docker/entrypoint.sh"]
     ports:
-      - "8081:8000"
+      - "127.0.0.1:8081:8000"
     volumes:
+      - ../hive-os-backend:/var/www/html
       - hive-backend-storage:/var/www/html/storage
     environment:
       APP_NAME: "Hive ERP"
       APP_ENV: local
-      APP_DEBUG: "true"
+      APP_DEBUG: "${APP_DEBUG:-false}"
+      # Laraowl is optional. Do not emit failing telemetry unless a reachable
+      # monitoring server has been deliberately configured for this stack.
+      LARAOWL_ENABLED: "${LARAOWL_ENABLED:-false}"
       APP_KEY: base64:c29tZXJhbmRvbXN0cmluZ2ZvcmRldmVsb3BtZW50MjE=
       APP_URL: http://localhost:8081
       FRONTEND_URL: http://localhost:3001
@@ -168,7 +193,7 @@ services:
       OCTANE_SERVER: roadrunner
       SCOUT_DRIVER: meilisearch
       MEILISEARCH_HOST: http://meilisearch:7700
-      MEILISEARCH_KEY: masterKey
+      MEILISEARCH_KEY: ${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       REDIS_HOST: redis
       CACHE_STORE: redis
       QUEUE_CONNECTION: redis
@@ -191,11 +216,11 @@ services:
       FFMPEG_URL: http://ffmpeg:9090
       # 📡 REAL-TIME BROADCASTING
       REVERB_APP_ID: "326162"
-      REVERB_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
-      REVERB_APP_SECRET: "u0shs2anhgao3uikmlbq"
+      REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
+      REVERB_APP_SECRET: "${REVERB_APP_SECRET:-${REVERB_APP_SECRET:-u0shs2anhgao3uikmlbq}}"
       REVERB_PORT: "9000"
       REVERB_SCHEME: "http"
-      NEXT_PUBLIC_REVERB_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
+      NEXT_PUBLIC_REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
       NEXT_PUBLIC_REVERB_HOST: "localhost"
       NEXT_PUBLIC_REVERB_PORT: "9095"
       NEXT_PUBLIC_REVERB_SCHEME: "http"
@@ -203,8 +228,8 @@ services:
       REVERB_HOST: reverb
       PUSHER_HOST: reverb
       PUSHER_APP_ID: "326162"
-      PUSHER_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
-      PUSHER_APP_SECRET: "u0shs2anhgao3uikmlbq"
+      PUSHER_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
+      PUSHER_APP_SECRET: "${REVERB_APP_SECRET:-${REVERB_APP_SECRET:-u0shs2anhgao3uikmlbq}}"
       PUSHER_PORT: "9000"
       PUSHER_SCHEME: "http"
     depends_on:
@@ -223,12 +248,124 @@ services:
       gotenberg:
         condition: service_started
     command: php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
+    healthcheck:
+      # /up is Laravel's own health route, so this proves Octane/RoadRunner is
+      # actually serving HTTP, not merely that a php process exists.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/up"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      # The entrypoint waits for Postgres, migrates, and rebuilds the docs
+      # search index on boot, so give it room before failures start to count.
+      start_period: 120s
     networks:
       hive-network:
         aliases:
+          # Every seeded demo tenant gets a *.localhost alias so docker-internal
+          # services can reach the backend by tenant hostname and the tenant
+          # subdomain preview (http://<id>.localhost:3001) is consistent.
+          # Keep in sync with Modules/Tenancy/database/seeders/TenantsSeeder.php
+          # (ids) and the `domains` table (each tenant needs a <id>.localhost
+          # domain record for Host-header resolution).
+          - afya-clinic.localhost
           - apple.localhost
+          - aquauno.localhost
+          - global-b2b.localhost
+          - harrawefarm.localhost
+          - lanouveil.localhost
+          - lms-demo.localhost # Aster Learning Academy (LMS academy demo)
+          - nile-suites.localhost
+          - savory-lounge.localhost
+          - selam-bistro.localhost
+          - techive.localhost
           - tesla.localhost
+          # Legacy alias — no seeded tenant with id 'spacex'; kept for
+          # compatibility.
           - spacex.localhost
+
+  # 7b. BACKEND PRE-WARMER (kills the first-call Octane worker boot)
+  #
+  # Octane boots the application inside a worker on that worker's first request:
+  # routes, config, service providers, DB/Redis connections, and the opcache
+  # entries for every file the request touches. Measured on this stack at
+  # ~1.1-1.2s for that first request against ~0.01-0.02s once the worker is warm,
+  # paid per worker (4 RoadRunner workers here). `/up` only proves the process is
+  # alive, so this also signs in once and exercises the authenticated surface —
+  # the part a human actually waits on. RoadRunner recycles workers after 500
+  # jobs or an hour, so it refreshes on an interval rather than warming once.
+  # See scripts/prewarm-backend.mjs.
+  backend-warmup:
+    image: node:22-alpine
+    container_name: hive-backend-warmup
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    volumes:
+      - ./scripts/prewarm-backend.mjs:/usr/local/bin/prewarm-backend.mjs:ro
+    environment:
+      WARMUP_BACKEND_URL: http://backend:8000
+      WARMUP_PUBLIC_ROUTES: "/up /api/v1/languages/public"
+      WARMUP_AUTH_ROUTES: "/api/v1/dashboard /api/v1/settings/general/runtime"
+      # The seeded central super admin (CentralUsersSeeder; password "password").
+      # Dev-stack credentials only — override for any other environment.
+      WARMUP_LOGIN_EMAIL: "super@hive.os"
+      WARMUP_LOGIN_PASSWORD: "password"
+      # Every worker has to be handed a request for its bootstrap to happen, so a
+      # pass covers the whole pool (5 workers here, auto-sized) — but with only 2
+      # requests in flight, so a real user's request is never queued behind the
+      # warmer. Firing all 8 at once measurably made the first post-restart
+      # request worse (12.8-16.1s against ~5s un-warmed).
+      WARMUP_REQUESTS: "5"
+      WARMUP_CONCURRENCY: "2"
+      # Watch the backend so warming follows a restart rather than the clock. A
+      # docker restart is unhealthy for only a couple of seconds and then answers
+      # 200, so the reliable signal is a probe that answers COLD, not a failure.
+      WARMUP_PROBE_SECONDS: "3"
+      # Per-tenant authenticated surface: logs each tenant's admin in via the
+      # tenant login route under the tenant's own Host (docker alias, kept in
+      # sync with the alias list above and TenantsSeeder), then warms the
+      # tenant-authenticated GET routes. Value-ordered and load-aware like the
+      # frontend warmer: central first, then one route across ALL tenants, then
+      # back to the second route; least-recently-warmed hosts first inside a
+      # tier; the tier is capped at WARMUP_TENANT_REQUESTS when the box is
+      # contended (probe-latency-aware too) and skipped when severe, with the
+      # deferred work retried after WARMUP_TENANT_BACKOFF_SECONDS. aquauno is a
+      # migrated tenant (config/tenancy.php migrated_tenants) whose synthetic
+      # accounts deliberately do not exist, so its login is expected to log a
+      # 401 and the pass moves on.
+      # Login cooldowns are per tenant (default 240s) and sit ABOVE the
+      # auth-login throttle windows (60s): the limiter counts 10/min per source
+      # IP across ALL login routes plus 5/min per email, so warmer logins never
+      # trip it on their own. techive has no admin@techive.com — the seeder
+      # builds a 7-person team — hence its override.
+      WARMUP_TENANT_HOSTS: "lanouveil.localhost global-b2b.localhost savory-lounge.localhost techive.localhost lms-demo.localhost"
+      WARMUP_TENANT_OVERRIDES: "techive.localhost=mikiyas.aemero@techive.com:password"
+      # Two tenant routes, in value order: every tenant's dashboard is warmed
+      # before anyone's runtime call (the tier walks ALL hosts per route). The
+      # runtime route is registered per-tenant behind plain auth:sanctum (no
+      # permission gate — Modules/Core/routes/api.php), so any signed-in tenant
+      # admin reaches it; verified 200 live with a tenant token.
+      WARMUP_TENANT_ROUTES: "/api/v1/dashboard /api/v1/settings/general/runtime"
+      WARMUP_TENANT_REQUESTS: "2"
+      WARMUP_TENANT_LOAD_BACKOFF: "6"
+      WARMUP_TENANT_BACKOFF_SECONDS: "60"
+      WARMUP_TENANT_PROBE_BACKOFF_MS: "3000"
+      WARMUP_REFRESH_SECONDS: "300"
+    command: ["node", "/usr/local/bin/prewarm-backend.mjs"]
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      # "Healthy" = the warming loop is turning: the script writes
+      # /tmp/backend-warmup-heartbeat at the start of every pass and after every
+      # request, so a heartbeat older than 10 minutes means the loop is wedged.
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{process.exit(Date.now()-fs.statSync('/tmp/backend-warmup-heartbeat').mtimeMs<600000?0:1)}catch(e){process.exit(1)}"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - hive-network
 
   # 8. THE WORKER (Background Jobs)
   queue:
@@ -238,22 +375,27 @@ services:
     container_name: hive-queue
     restart: unless-stopped
     volumes:
+      - ../hive-os-backend:/var/www/html
       - hive-backend-storage:/var/www/html/storage
     environment:
       APP_NAME: "Hive ERP"
       APP_ENV: local
+      LARAOWL_ENABLED: "${LARAOWL_ENABLED:-false}"
       APP_KEY: base64:c29tZXJhbmRvbXN0cmluZ2ZvcmRldmVsb3BtZW50MjE=
       DB_CONNECTION: pgsql
       DB_HOST: db
       DB_DATABASE: hive
       DB_USERNAME: hive
       DB_PASSWORD: password
+      SCOUT_DRIVER: meilisearch
+      MEILISEARCH_HOST: http://meilisearch:7700
+      MEILISEARCH_KEY: ${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       REDIS_HOST: redis
       CACHE_STORE: redis
       QUEUE_CONNECTION: redis
       REVERB_APP_ID: "326162"
-      REVERB_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
-      REVERB_APP_SECRET: "u0shs2anhgao3uikmlbq"
+      REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
+      REVERB_APP_SECRET: "${REVERB_APP_SECRET:-${REVERB_APP_SECRET:-u0shs2anhgao3uikmlbq}}"
       REVERB_PORT: "9000"
       REVERB_SCHEME: "http"
       FILESYSTEM_DISK: s3
@@ -274,21 +416,35 @@ services:
       REVERB_HOST: reverb
       PUSHER_HOST: reverb
       PUSHER_APP_ID: "326162"
-      PUSHER_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
-      PUSHER_APP_SECRET: "u0shs2anhgao3uikmlbq"
+      PUSHER_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
+      PUSHER_APP_SECRET: "${REVERB_APP_SECRET:-${REVERB_APP_SECRET:-u0shs2anhgao3uikmlbq}}"
       PUSHER_PORT: "9000"
       PUSHER_SCHEME: "http"
       FRONTEND_URL: http://localhost:3001
+      FFMPEG_URL: http://ffmpeg:9090
     depends_on:
       redis:
         condition: service_healthy
       db:
         condition: service_healthy
+      meilisearch:
+        condition: service_healthy
       seaweedfs:
         condition: service_started
       seaweedfs-bootstrap:
         condition: service_completed_successfully
+      ffmpeg:
+        condition: service_healthy
     command: php artisan horizon
+    healthcheck:
+      # horizon:status exit codes: 0 = running, 1 = paused, 2 = no master
+      # supervisor. A paused or dead Horizon is therefore unhealthy, not just a
+      # container that lost its process.
+      test: ["CMD", "php", "artisan", "horizon:status"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
     networks:
       - hive-network
 
@@ -302,6 +458,7 @@ services:
     environment:
       APP_NAME: "Hive ERP"
       APP_ENV: local
+      LARAOWL_ENABLED: "${LARAOWL_ENABLED:-false}"
       APP_KEY: base64:c29tZXJhbmRvbXN0cmluZ2ZvcmRldmVsb3BtZW50MjE=
       DB_CONNECTION: pgsql
       DB_HOST: db
@@ -312,7 +469,7 @@ services:
       OCTANE_SERVER: roadrunner
       SCOUT_DRIVER: meilisearch
       MEILISEARCH_HOST: http://meilisearch:7700
-      MEILISEARCH_KEY: masterKey
+      MEILISEARCH_KEY: ${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       REDIS_HOST: redis
       CACHE_STORE: redis
       QUEUE_CONNECTION: redis
@@ -334,15 +491,15 @@ services:
       GOTENBERG_URL: http://gotenberg:3000
       FFMPEG_URL: http://ffmpeg:9090
       REVERB_APP_ID: "326162"
-      REVERB_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
-      REVERB_APP_SECRET: "u0shs2anhgao3uikmlbq"
+      REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
+      REVERB_APP_SECRET: "${REVERB_APP_SECRET:-${REVERB_APP_SECRET:-u0shs2anhgao3uikmlbq}}"
       REVERB_PORT: "9000"
       REVERB_SCHEME: "http"
       REVERB_HOST: reverb
       PUSHER_HOST: reverb
       PUSHER_APP_ID: "326162"
-      PUSHER_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
-      PUSHER_APP_SECRET: "u0shs2anhgao3uikmlbq"
+      PUSHER_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
+      PUSHER_APP_SECRET: "${REVERB_APP_SECRET:-${REVERB_APP_SECRET:-u0shs2anhgao3uikmlbq}}"
       PUSHER_PORT: "9000"
       PUSHER_SCHEME: "http"
       FRONTEND_URL: http://localhost:3001
@@ -357,7 +514,18 @@ services:
       seaweedfs-bootstrap:
         condition: service_completed_successfully
     command: php artisan schedule:work
+    healthcheck:
+      # Proves the app boots and the schedule resolves — a broken provider or a
+      # malformed scheduled command surfaces here. Liveness of the loop itself
+      # is covered by Docker supervision: PID 1 is `schedule:work`, so if the
+      # loop dies the container exits and restart: unless-stopped restarts it.
+      test: ["CMD", "php", "artisan", "schedule:list"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 60s
     volumes:
+      - ../hive-os-backend:/var/www/html
       - hive-backend-storage:/var/www/html/storage
     networks:
       - hive-network
@@ -369,28 +537,111 @@ services:
       dockerfile: Dockerfile
     container_name: hive-frontend
     restart: unless-stopped
+    # Run the mounted entrypoint rather than the copy baked into the image, so
+    # dev-server startup changes (e.g. NEXT_DEV_BUNDLER) apply on restart
+    # without an image rebuild.
+    entrypoint: ["sh", "/app/docker-entrypoint.sh"]
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
     volumes:
       - ../hive-os-frontend:/app
-      - /app/node_modules
-      - /app/.next
     environment:
       NODE_ENV: development
       NEXT_PUBLIC_API_URL: http://localhost:8081/api/v1
       INTERNAL_API_URL: http://backend:8000/api/v1
       WATCHPACK_POLLING: "true"
       # 📡 REAL-TIME BROADCASTING
-      NEXT_PUBLIC_REVERB_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
+      NEXT_PUBLIC_REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
       NEXT_PUBLIC_REVERB_HOST: "localhost"
       NEXT_PUBLIC_REVERB_PORT: "9095"
       NEXT_PUBLIC_REVERB_SCHEME: "http"
       # 🚀Forces Next.js to broadcast outside the container
       HOSTNAME: "0.0.0.0"
       PORT: 3000
+      # Next.js dev compile cache: the entrypoint keeps .next/dev across restarts
+      # and only resets it when the Next.js/Node/dependency signature changes, so
+      # a plain restart no longer forces every route to recompile. Set to
+      # "always" to force a reset on the next start.
+      NEXT_DEV_CACHE_RESET: "auto"
+      # Dev bundler: "turbopack" (default, fast, on-disk cache) or "webpack".
+      NEXT_DEV_BUNDLER: "turbopack"
     depends_on:
       - backend
-    command: sh /app/docker-entrypoint.sh
+    healthcheck:
+      # /health is the app's own dependency-free route handler, so a health
+      # check stays cheap instead of server-rendering a whole page every
+      # interval. Warming the heavy routes is frontend-warmup's job; the long
+      # start_period still covers the dev server's own boot.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 30s
+      retries: 5
+      start_period: 180s
+    networks:
+      - hive-network
+
+  # 9b. FRONTEND PRE-WARMER (kills the first-visit compile wait)
+  #
+  # `next dev` compiles each route on first request and the frontend resets its
+  # dev cache on every start, so without this the first visit after each start
+  # waits 1-17s per route (measured). This warms the key routes as soon as the
+  # dev server answers and refreshes them on an interval, so that wait lands
+  # here instead of on a human. See scripts/prewarm-frontend.mjs.
+  frontend-warmup:
+    image: node:22-alpine
+    container_name: hive-frontend-warmup
+    restart: unless-stopped
+    depends_on:
+      frontend:
+        condition: service_started
+    volumes:
+      - ./scripts/prewarm-frontend.mjs:/usr/local/bin/prewarm-frontend.mjs:ro
+    environment:
+      WARMUP_BASE_URL: http://frontend:3000
+      WARMUP_ROUTES: "/ /sign-in /forgot-password /dashboard /hivedocs"
+      # Seeded demo tenants as <id>.localhost — the same hosts the backend
+      # service carries as network aliases above, since tenant identity is
+      # derived from the hostname. Keep in sync with that alias list and
+      # Modules/Tenancy/database/seeders/TenantsSeeder.php. The legacy
+      # spacex.localhost alias is deliberately omitted: no seeded tenant
+      # sits behind it.
+      WARMUP_TENANT_HOSTS: "afya-clinic.localhost apple.localhost aquauno.localhost global-b2b.localhost harrawefarm.localhost lanouveil.localhost lms-demo.localhost nile-suites.localhost savory-lounge.localhost selam-bistro.localhost techive.localhost tesla.localhost"
+      WARMUP_REFRESH_SECONDS: "300"
+      # Probe the dev server this often, so a frontend restart is followed by a
+      # warm pass immediately instead of waiting for the next refresh.
+      WARMUP_PROBE_SECONDS: "10"
+      # The first route here is warmed across ALL tenant hosts before the second
+      # one starts, so a stop part-way through still leaves every tenant with its
+      # landing page instead of fully warming three tenants and missing nine.
+      WARMUP_TENANT_ROUTES: "/ /dashboard"
+      # Adaptive under load: a full pass is 29 requests and took 8.5 MINUTES on a
+      # saturated host, competing with the visitors it exists to serve. The pass
+      # warms the shared entry points first, then one route across every tenant,
+      # and stops once the 1-minute load average says the box is contended — a
+      # contended host gets the shared routes plus WARMUP_CONTENDED_REQUESTS
+      # tenants, a severely contended one gets WARMUP_MIN_ROUTES (default 2)
+      # shared routes only. Successive passes work through the tenants warmed
+      # longest ago, so a long busy spell still covers every tenant instead of
+      # re-warming the same two.
+      # Deferred routes are retried after WARMUP_BACKOFF_SECONDS rather than
+      # waiting out the refresh interval.
+      # See scripts/prewarm-frontend.mjs for the full contract.
+      WARMUP_LOAD_BACKOFF: "6"
+      WARMUP_CONTENDED_REQUESTS: "2"
+      WARMUP_BACKOFF_SECONDS: "60"
+      WARMUP_PROBE_BACKOFF_MS: "3000"
+    command: ["node", "/usr/local/bin/prewarm-frontend.mjs"]
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      # "Healthy" = the warming loop is turning: the script writes
+      # /tmp/warmup-heartbeat at the start of every pass and after every route,
+      # so a heartbeat older than 10 minutes means the loop is wedged.
+      test: ["CMD", "node", "-e", "const fs=require('fs');try{process.exit(Date.now()-fs.statSync('/tmp/warmup-heartbeat').mtimeMs<600000?0:1)}catch(e){process.exit(1)}"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     networks:
       - hive-network
 
@@ -400,7 +651,7 @@ services:
     container_name: hive-adminer
     restart: unless-stopped
     ports:
-      - "8083:8080"
+      - "127.0.0.1:8083:8080"
     environment:
       ADMINER_DEFAULT_SERVER: db
     depends_on:
@@ -417,12 +668,14 @@ services:
     container_name: hive-reverb
     restart: unless-stopped
     ports:
-      - "9095:9000" # Expose Reverb to your local browser
+      - "127.0.0.1:9095:9000" # Expose Reverb to your local browser
     volumes:
+      - ../hive-os-backend:/var/www/html
       - hive-backend-storage:/var/www/html/storage
     environment:
       APP_NAME: "Hive ERP"
       APP_ENV: local
+      LARAOWL_ENABLED: "${LARAOWL_ENABLED:-false}"
       APP_KEY: base64:c29tZXJhbmRvbXN0cmluZ2ZvcmRldmVsb3BtZW50MjE=
       DB_CONNECTION: pgsql
       DB_HOST: db
@@ -430,10 +683,12 @@ services:
       DB_USERNAME: hive
       DB_PASSWORD: password
       REDIS_HOST: redis
+      CACHE_STORE: redis
+      CACHE_DRIVER: redis
       BROADCAST_CONNECTION: reverb
       REVERB_APP_ID: "326162"
-      REVERB_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
-      REVERB_APP_SECRET: "u0shs2anhgao3uikmlbq"
+      REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
+      REVERB_APP_SECRET: "${REVERB_APP_SECRET:-${REVERB_APP_SECRET:-u0shs2anhgao3uikmlbq}}"
       REVERB_HOST: localhost
       REVERB_PORT: "9000"
       REVERB_SCHEME: "http"
@@ -456,7 +711,16 @@ services:
         condition: service_started
       seaweedfs-bootstrap:
         condition: service_completed_successfully
-    command: php artisan reverb:start --host=0.0.0.0 --port=9000 --debug
+    command: php artisan reverb:start --host=0.0.0.0 --port=9000
+    healthcheck:
+      # A real WebSocket upgrade on the Pusher path (/app/<key>): a 101 proves
+      # Reverb accepts live WS connections rather than merely holding the port
+      # open. The key is interpolated from the same variable the server uses.
+      test: ["CMD-SHELL", "curl -s -o /dev/null -w '%{http_code}' --max-time 3 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' http://localhost:9000/app/${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8} | grep -q 101"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     networks:
       - hive-network
 
@@ -468,7 +732,17 @@ services:
     container_name: hive-ffmpeg
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "127.0.0.1:${FFMPEG_HOST_PORT:-9092}:9090"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=3g
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 256
+    mem_limit: 3g
+    cpus: 2.0
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:9090/health || exit 1"]
       interval: 10s
@@ -483,16 +757,215 @@ services:
     container_name: hive-gotenberg
     restart: unless-stopped
     ports:
-      - "3030:3000" # Mapped to 3030 on the host machine to prevent port collision with Next.js
+      - "127.0.0.1:${GOTENBERG_HOST_PORT:-8090}:3000"
     networks:
       - hive-network
+
+  # 🧠 14. LOCAL LANGUAGE MODEL (Ollama)
+  #
+  # The assistant's phrasing layer, self-hosted. Nothing here is metered and no
+  # request leaves the machine — which is the whole reason it exists: every
+  # hosted free tier has a quota, and this one does not.
+  #
+  # It is only ever asked to word an answer Hive has already established and
+  # verified, so a small model is sufficient; it does not need to know anything.
+  ollama:
+    image: ollama/ollama:latest
+    container_name: hive-ollama
+    restart: unless-stopped
+    ports:
+      # Exposed for `ollama pull` from the host. The backend reaches it over the
+      # compose network at http://ollama:11434 instead.
+      - "127.0.0.1:11434:11434"
+    volumes:
+      - hive-ollama-models:/root/.ollama
+    environment:
+      # Keep the model resident so the first message after an idle spell is not
+      # noticeably slower than the rest.
+      OLLAMA_KEEP_ALIVE: "24h"
+      # One at a time: this GPU is shared with everything else on the machine.
+      OLLAMA_NUM_PARALLEL: "1"
+      OLLAMA_MAX_LOADED_MODELS: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    # GPU passthrough is optional. Ollama automatically uses CPU if GPU is not available.
+    networks:
+      - hive-network
+
+  # ==========================================
+  # Monitoring Stack (Profile: monitoring)
+  # ==========================================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: hive-prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - hive-prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:9080:9090"
+    networks:
+      - hive-network
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: hive-alertmanager
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports:
+      - "127.0.0.1:9093:9093"
+    networks:
+      - hive-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: hive-grafana
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:?GF_SECURITY_ADMIN_PASSWORD must be set in .env}
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - hive-grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3002:3000"
+    networks:
+      - hive-network
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: hive-node-exporter
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    ports:
+      - "127.0.0.1:9100:9100"
+    networks:
+      - hive-network
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: hive-cadvisor
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    devices:
+      - /dev/kmsg
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:8089:8080"
+    networks:
+      - hive-network
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: hive-postgres-exporter
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    environment:
+      - DATA_SOURCE_NAME=postgresql://hive:password@db:5432/hive?sslmode=disable
+    ports:
+      - "127.0.0.1:9187:9187"
+    networks:
+      - hive-network
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: hive-redis-exporter
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    environment:
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "127.0.0.1:9121:9121"
+    networks:
+      - hive-network
+
+  blackbox-exporter:
+    image: prom/blackbox-exporter:latest
+    container_name: hive-blackbox-exporter
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    volumes:
+      - ./monitoring/blackbox.yml:/config/blackbox.yml:ro
+    ports:
+      - "127.0.0.1:9115:9115"
+    networks:
+      - hive-network
+
+  video-backend:
+    image: hive-video-backend:latest
+    build:
+      context: ./video-backend
+    container_name: hive-video-backend
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${VIDEO_BACKEND_HOST_PORT:-5001}:5001"
+    env_file: .video/backend.env
+    volumes:
+      - hive-video-data:/app/data
+    networks: [hive-network]
+    depends_on: [video-media]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  video-media:
+    image: livekit/livekit-server:v1.13.6
+    container_name: hive-video-media
+    restart: unless-stopped
+    command: --config /etc/livekit.yaml
+    ports:
+      - "127.0.0.1:17880:7880"
+      - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17881:17881"
+      - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17882:17882/udp"
+      - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:17883:17883/udp"
+      - "${HIVE_VIDEO_MEDIA_IP:-127.0.0.1}:50300-50340:50300-50340/udp"
+    volumes:
+      - ./.video/livekit.yaml:/etc/livekit.yaml:ro
+    networks: [hive-network]
 
 networks:
   hive-network:
     driver: bridge
 
 volumes:
+  hive-prometheus-data:
+  hive-grafana-data:
   hive-db-data:
   hive-search-data:
   hive-seaweedfs-data:
   hive-backend-storage:
+  hive-ollama-models:
+
+  hive-video-data:
+    external: true
+    name: hive-video_video-data

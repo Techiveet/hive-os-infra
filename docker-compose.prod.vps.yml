@@ -1,6 +1,10 @@
 services:
   # Reverse Proxy
   caddy:
+    # The VPS already has a shared edge Caddy container that owns ports 80/443.
+    # Coolify must not create a second gateway during application deployments.
+    profiles:
+      - legacy-gateway
     build:
       context: .
       dockerfile: Dockerfile.caddy
@@ -14,40 +18,63 @@ services:
       - .env
     environment:
       CF_API_TOKEN: ${CF_API_TOKEN:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-hive-monitor.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      VIDEO_DOMAIN: ${VIDEO_DOMAIN:-hive-video.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-hive-monitor.techiveet.com}
     ports:
       - "80:80"
       - "443:443"
-      - "443:443/udp"
     volumes:
-      - ./storage/caddy_runtime/Caddyfile:/etc/caddy/Caddyfile:ro
       - ./storage/caddy_data:/data
       - ./storage/caddy_config:/config
     depends_on:
       frontend:
-        condition: service_healthy
+        condition: service_started
       backend:
         condition: service_healthy
       reverb:
-        condition: service_started
-      grafana:
+        condition: service_healthy
+      video-media:
         condition: service_started
     networks:
       - hive-network
 
   # Cache
   redis:
-    image: redis:alpine
+    # Production AOF/RDB data was written by Redis 8.10.2 (RDB v15).
+    # 8.8 cannot load it. Keep the compatible version immutable across deploys.
+    image: redis:8.10.2-alpine@sha256:3811787313eba226a2ef38658c6ccb91cd5e110edc89c37767de373120a0e5a0
     container_name: hive-redis
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 768M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Queues, sessions and cache share this instance. Cap memory below the
+    # container limit and only evict keys that carry a TTL (cache, sessions),
+    # never queued jobs. Set REDIS_PASSWORD in .env to require auth; the
+    # backend reads the same variable.
+    command: >
+      sh -c 'exec redis-server --appendonly yes --maxmemory 640mb --maxmemory-policy volatile-lru $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+      # redis-cli (healthcheck, scripts) authenticates from this.
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
     expose:
       - "6379"
+    volumes:
+      - ./storage/redis-data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -55,35 +82,141 @@ services:
       retries: 10
       start_period: 5s
     networks:
-      - hive-network
+      hive-network:
+        aliases:
+          - hive-stack-redis
 
   # Database
   db:
     image: postgres:17-alpine
     container_name: hive-db
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     ports:
-      - "127.0.0.1:${DB_HOST_PORT:-5432}:5432"
+      - "127.0.0.1:${DB_HOST_PORT:-5433}:5432"
     env_file:
       - .env
     environment:
       POSTGRES_DB: ${DB_DATABASE:-hive}
       POSTGRES_USER: ${DB_USERNAME:-hive}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
     volumes:
-      - ./storage/db-data:/var/lib/postgresql/data
+      # Preserve the established production cluster while moving process
+      # ownership to the Git-connected Coolify application.
+      - /root/projects/hive/storage/db-data:/var/lib/postgresql/data
     expose:
       - "5432"
     healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          "pg_isready -U ${DB_USERNAME:-hive} -d ${DB_DATABASE:-hive}",
-        ]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-hive}"]
       interval: 5s
       timeout: 5s
-      retries: 10
-      start_period: 10s
+      retries: 15
+      start_period: 30s
+    networks:
+      - hive-network
+
+  # PostgreSQL backups, independent of the application. Cluster mode runs
+  # pg_dumpall, so every workspace database (tenant<id>) is included, not just
+  # the central one. Dumps land on the host next to the other data
+  # directories. Production off-site recovery uses the encrypted cPanel timer;
+  # db-backup-offsite is a separate, explicitly opt-in S3 mirror.
+  db-backup:
+    image: prodrigestivill/postgres-backup-local:17-alpine
+    container_name: hive-db-backup
+    restart: unless-stopped
+    environment:
+      POSTGRES_HOST: db
+      POSTGRES_DB: ${DB_DATABASE:-hive}
+      POSTGRES_USER: ${DB_USERNAME:-hive}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      POSTGRES_CLUSTER: "TRUE"
+      SCHEDULE: ${DB_BACKUP_SCHEDULE:-@daily}
+      BACKUP_KEEP_DAYS: 7
+      BACKUP_KEEP_WEEKS: 4
+      BACKUP_KEEP_MONTHS: 6
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - /root/projects/hive/storage/db-backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - hive-network
+
+  # Off-site copy of the dumps above. A backup on the same disk as the
+  # database does not survive losing that disk. Idles until BACKUP_REMOTE_*
+  # is set; use a private bucket with server-side encryption.
+  db-backup-offsite:
+    # Not required by Hive: enable only after configuring a separate S3 mirror.
+    profiles:
+      - optional-s3-backup
+    # The actual cPanel backup job is monitored independently; do not treat
+    # this intentionally disabled helper as an application readiness probe.
+    exclude_from_hc: true
+    # The pinned, checksum-verified mc client also used by seaweedfs-bootstrap.
+    build:
+      context: ./seaweedfs-bootstrap
+      dockerfile: Dockerfile
+    image: hive-seaweedfs-bootstrap:2025-08-13
+    container_name: hive-db-backup-offsite
+    restart: unless-stopped
+    # Optional S3 mirror; production off-site backups use the separately
+    # monitored encrypted cPanel timer. This mirror remains explicitly idle
+    # until separately configured; process uptime is not backup-delivery proof.
+    environment:
+      BACKUP_REMOTE_ENDPOINT: ${BACKUP_REMOTE_ENDPOINT:-}
+      BACKUP_REMOTE_ACCESS_KEY: ${BACKUP_REMOTE_ACCESS_KEY:-}
+      BACKUP_REMOTE_SECRET_KEY: ${BACKUP_REMOTE_SECRET_KEY:-}
+      BACKUP_REMOTE_BUCKET: ${BACKUP_REMOTE_BUCKET:-}
+      BACKUP_SYNC_INTERVAL: ${BACKUP_SYNC_INTERVAL:-21600}
+    entrypoint: >
+      /bin/sh -ec '
+        if [ -z "$${BACKUP_REMOTE_ENDPOINT}" ] || [ -z "$${BACKUP_REMOTE_ACCESS_KEY}" ] || [ -z "$${BACKUP_REMOTE_SECRET_KEY}" ] || [ -z "$${BACKUP_REMOTE_BUCKET}" ]; then
+          echo "offsite-backup: WARNING BACKUP_REMOTE_* not configured; backups stay on this server only."; exec sleep infinity;
+        fi;
+        until mc alias set offsite "$${BACKUP_REMOTE_ENDPOINT}" "$${BACKUP_REMOTE_ACCESS_KEY}" "$${BACKUP_REMOTE_SECRET_KEY}" >/dev/null 2>&1; do
+          echo "offsite-backup: waiting for remote endpoint..."; sleep 10;
+        done;
+        mc mb --ignore-existing "offsite/$${BACKUP_REMOTE_BUCKET}" >/dev/null 2>&1 || true;
+        while true; do
+          echo "offsite-backup: mirroring local backups to remote...";
+          mc mirror --overwrite /backups "offsite/$${BACKUP_REMOTE_BUCKET}" || echo "offsite-backup: mirror failed, will retry";
+          sleep "$${BACKUP_SYNC_INTERVAL}";
+        done
+      '
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - /root/projects/hive/storage/db-backups:/backups:ro
+    depends_on:
+      db-backup:
+        condition: service_started
     networks:
       - hive-network
 
@@ -92,36 +225,85 @@ services:
     image: chrislusf/seaweedfs:3.94
     container_name: hive-seaweedfs
     restart: unless-stopped
-    command: server -dir=/data -s3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # Coolify attaches every service to its own default network as well as
+    # hive-network, so this container has two IPs. `weed server` otherwise
+    # binds only to the single IP it auto-detects, leaving the other network
+    # (the one the backend resolves `seaweedfs` to) refusing 8333/9333.
+    #
+    # weed 3.94 ignores AWS_* env vars, so without an identity file the S3 API
+    # accepts anonymous requests. Render one from the same credentials the
+    # backend signs with; anonymous and wrongly-signed requests then get 403.
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        : "$${AWS_ACCESS_KEY_ID:?}" "$${AWS_SECRET_ACCESS_KEY:?}"
+        mkdir -p /etc/seaweedfs
+        printf '{"identities":[{"name":"hive","credentials":[{"accessKey":"%s","secretKey":"%s"}],"actions":["Admin","Read","List","Tagging","Write"]}]}' "$$AWS_ACCESS_KEY_ID" "$$AWS_SECRET_ACCESS_KEY" > /etc/seaweedfs/s3.json
+        exec /entrypoint.sh server -dir=/data -s3 -ip.bind=0.0.0.0 -s3.config=/etc/seaweedfs/s3.json
     environment:
       AWS_ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-hive-seaweedfs}
-      AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-change-this-seaweedfs-secret}
+      AWS_SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:?SEAWEEDFS_SECRET_KEY must be set in .env}
     volumes:
-      - ./storage/seaweedfs-data:/data
+      # Keep the existing customer object data; only the managing container
+      # changes during the Coolify cutover.
+      - /root/projects/hive/storage/seaweedfs-data:/data
     expose:
       - "8333"
       - "9333"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9333/cluster/status >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
     networks:
       - hive-network
 
   seaweedfs-bootstrap:
-    image: minio/mc:latest
+    build:
+      context: ./seaweedfs-bootstrap
+      dockerfile: Dockerfile
+    image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-seaweedfs-bootstrap
     restart: "no"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     depends_on:
       seaweedfs:
-        condition: service_started
+        condition: service_healthy
     environment:
       SEAWEEDFS_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-hive-seaweedfs}
-      SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-change-this-seaweedfs-secret}
+      SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:?SEAWEEDFS_SECRET_KEY must be set in .env}
       SEAWEEDFS_BUCKET: ${SEAWEEDFS_BUCKET:-hive-production}
-    entrypoint: >
-      /bin/sh -ec "
-        until mc alias set local http://seaweedfs:8333 $${SEAWEEDFS_ACCESS_KEY} $${SEAWEEDFS_SECRET_KEY} >/dev/null 2>&1; do
-          sleep 2;
-        done;
-        mc mb --ignore-existing local/$${SEAWEEDFS_BUCKET} >/dev/null 2>&1 || true;
-      "
+    entrypoint:
+      - /bin/sh
+      - -ec
+    # Keep the executable and script separate for Compose tooling. Storage
+    # readiness, not process startup alone, must precede authentication.
+    command:
+      - |
+        ready=0
+        for i in $$(seq 1 60); do
+          if mc alias set local http://seaweedfs:8333 "$${SEAWEEDFS_ACCESS_KEY}" "$${SEAWEEDFS_SECRET_KEY}" >/dev/null 2>&1; then ready=1; break; fi
+          sleep 2
+        done
+        if [ "$$ready" != 1 ]; then echo 'storage-bootstrap: authenticated endpoint unavailable' >&2; exit 1; fi
+        mc mb --ignore-existing "local/$${SEAWEEDFS_BUCKET}" >/dev/null 2>&1
+        exec tail -f /dev/null
+    healthcheck:
+      test: ["CMD-SHELL", "mc stat local/$${SEAWEEDFS_BUCKET} >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -137,7 +319,7 @@ services:
       ENDPOINT: seaweedfs:8333
       REGION: us-east-1
       ACCESS_KEY_ID: ${SEAWEEDFS_ACCESS_KEY:-hive-seaweedfs}
-      SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:-change-this-seaweedfs-secret}
+      SECRET_ACCESS_KEY: ${SEAWEEDFS_SECRET_KEY:?SEAWEEDFS_SECRET_KEY must be set in .env}
       USE_SSL: "false"
       SIGNATURE_TYPE: V4
       FORCE_DOWNLOAD: "false"
@@ -155,11 +337,22 @@ services:
     image: getmeili/meilisearch:v1.10
     container_name: hive-search
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     environment:
-      MEILI_MASTER_KEY: ${MEILISEARCH_KEY:-masterKey}
+      MEILI_MASTER_KEY: ${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       MEILI_NO_ANALYTICS: "true"
     volumes:
-      - ./storage/search-data:/meili_data
+      # Reuse the established production index during the Coolify cutover.
+      - /root/projects/hive/storage/search-data:/meili_data
     expose:
       - "7700"
     healthcheck:
@@ -173,12 +366,34 @@ services:
 
   # AI Background Removal
   rembg:
-    image: danielgatis/rembg:latest
+    # Pinned: :latest (rembg 2.0.85 / onnxruntime 1.30) is OOM-killed under
+    # the 1.5G cap on a 64x64 PNG; 2.0.75 serves it at ~1G.
+    image: danielgatis/rembg:2.0.75@sha256:cab922905c34a1a08ba8a98d48034b085a223579e96b0925a8e99d123d7f578e
     container_name: hive-ai-rembg
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     command: s --host 0.0.0.0 --port 5000
+    volumes:
+      # Pre-seeded u2net model (176 MB). Without it the first request
+      # downloads and loads the model at once and blows past the memory cap.
+      - /root/projects/hive/storage/rembg-models:/root/.u2net
     expose:
       - "5000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5000/openapi.json >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
@@ -190,6 +405,16 @@ services:
     image: hive-ffmpeg
     container_name: hive-ffmpeg
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     expose:
       - "9090"
     healthcheck:
@@ -210,32 +435,121 @@ services:
     image: gotenberg/gotenberg:8
     container_name: hive-gotenberg
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1.5G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     expose:
       - "3000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:3000/health >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - hive-network
+
+  # Private bounded CPU inference; no public port or GPU libraries.
+  ollama:
+    image: ${OLLAMA_IMAGE:-ghcr.io/techiveet/hive-ollama-cpu@sha256:62106c69377c18c84b676725c92984e025de13a1f9fc6c37cbfbe61af8d68b69}
+    restart: unless-stopped
+    mem_limit: 1792m
+    memswap_limit: 2048m
+    cpus: 2.0
+    pids_limit: 256
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_CONTEXT_LENGTH: 2048
+      OLLAMA_NUM_PARALLEL: 1
+      OLLAMA_MAX_LOADED_MODELS: 1
+      OLLAMA_KEEP_ALIVE: 2m
+      OLLAMA_MAX_QUEUE: 8
+      OLLAMA_NO_CLOUD: "true"
+    volumes:
+      - hive-ollama-models:/root/.ollama
+    expose:
+      - "11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     networks:
       - hive-network
 
   # Laravel Backend
   backend:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-0e88096ee763792bfdfe3e97b0c01c32ce3d5ed1}
+    build:
+      context: ./ops/releases/combined-branches-20261018/backend
+    pull_policy: build
     container_name: hive-backend
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
       APP_ENV: production
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
+      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
+      COPILOT_MODEL: ${COPILOT_MODEL:-qwen3.5:0.8b-q8_0}
+      COPILOT_REPLY_MAX_TOKENS: ${COPILOT_REPLY_MAX_TOKENS:-128}
+      COPILOT_PHRASING_MAX_TOKENS: ${COPILOT_PHRASING_MAX_TOKENS:-128}
+      COPILOT_PHRASING_TIMEOUT: ${COPILOT_PHRASING_TIMEOUT:-20}
+      APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
+      APP_KEY: ${APP_KEY:?APP_KEY must be set in .env}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      DB_CONNECTION: ${DB_CONNECTION:-pgsql}
+      DB_DATABASE: ${DB_DATABASE:-hive}
+      DB_USERNAME: ${DB_USERNAME:-hive}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+      DB_PORT: 5432
+      CACHE_STORE: ${CACHE_STORE:-redis}
+      SESSION_DRIVER: ${SESSION_DRIVER:-redis}
+      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
+      REDIS_QUEUE_RETRY_AFTER: 360
+      REDIS_LONG_QUEUE_RETRY_AFTER: 3900
       OCTANE_SERVER: roadrunner
       SERVER_IP: ${SERVER_IP:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.gulfingot.com}
-      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.gulfingot.com}
-      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.gulfingot.com}
-      DB_DOMAIN: ${DB_DOMAIN:-hive-db.gulfingot.com}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.techiveet.com}
+      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.techiveet.com}
+      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.techiveet.com}
+      DB_DOMAIN: ${DB_DOMAIN:-hive-db.techiveet.com}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
       FRONTEND_INTERNAL_URL: ${FRONTEND_INTERNAL_URL:-http://frontend:3000}
       REVERB_INTERNAL_URL: ${REVERB_INTERNAL_URL:-http://reverb:9000}
@@ -243,21 +557,25 @@ services:
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
-      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       REMBG_INTERNAL_URL: ${REMBG_INTERNAL_URL:-http://rembg:5000}
       GOTENBERG_INTERNAL_URL: ${GOTENBERG_INTERNAL_URL:-http://gotenberg:3000}
       FFMPEG_INTERNAL_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
+      FFMPEG_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
-      REVERB_APP_ID: ${REVERB_APP_ID}
-      REVERB_APP_KEY: ${REVERB_APP_KEY}
-      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      REVERB_APP_ID: ${REVERB_APP_ID:?REVERB_APP_ID must be set in .env}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:?REVERB_APP_KEY must be set in .env}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:?REVERB_APP_SECRET must be set in .env}
       REVERB_HOST: reverb
       REVERB_PORT: ${REVERB_PORT:-9000}
       REVERB_SCHEME: ${REVERB_SCHEME:-http}
       PUSHER_HOST: reverb
+      HIVE_VIDEO_ENABLED: ${HIVE_VIDEO_ENABLED:-true}
+      HIVE_VIDEO_BACKEND_URL: ${HIVE_VIDEO_BACKEND_URL:-http://video-backend:5001}
+      HIVE_VIDEO_SECRET: ${HIVE_VIDEO_SECRET:?HIVE_VIDEO_SECRET must be set in .env}
     depends_on:
       redis:
         condition: service_healthy
@@ -265,8 +583,6 @@ services:
         condition: service_healthy
       seaweedfs:
         condition: service_started
-      seaweedfs-bootstrap:
-        condition: service_completed_successfully
       meilisearch:
         condition: service_healthy
       rembg:
@@ -275,52 +591,95 @@ services:
         condition: service_started
       ffmpeg:
         condition: service_healthy
+      video-backend:
+        condition: service_healthy
     command: >
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan optimize:clear &&
         php artisan config:cache &&
-        php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
+        (php artisan hive:deploy --force || echo "hive:deploy FAILED: databases were not migrated; serving with the current schema. See the output above.") &&
+        exec php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
       '
     expose:
       - "8000"
+    # hive:deploy backs up, migrates (central and every workspace), adds new
+    # permissions and runs new deploy seeders before Octane starts. It refuses
+    # migrations that would delete data. If it fails, the app still starts on
+    # the current schema so a bad migration cannot take production down.
+    # Healthy only once that has finished and Octane answers, so the queue,
+    # scheduler and Reverb never start against an old schema.
     healthcheck:
-      test:
-        ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/up || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8000/up || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 18
-      start_period: 30s
+      retries: 6
+      start_period: 600s
+    volumes:
+      - hive-app-backups:/var/www/html/storage/app/private/system-backups
     networks:
       - hive-network
+      - hive-production-data
 
   # Queue Worker / Horizon
   queue:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-0e88096ee763792bfdfe3e97b0c01c32ce3d5ed1}
+    build:
+      context: ./ops/releases/combined-branches-20261018/backend
+    pull_policy: build
     container_name: hive-queue
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
       APP_ENV: production
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
+      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
+      COPILOT_MODEL: ${COPILOT_MODEL:-qwen3.5:0.8b-q8_0}
+      COPILOT_REPLY_MAX_TOKENS: ${COPILOT_REPLY_MAX_TOKENS:-128}
+      COPILOT_PHRASING_MAX_TOKENS: ${COPILOT_PHRASING_MAX_TOKENS:-128}
+      COPILOT_PHRASING_TIMEOUT: ${COPILOT_PHRASING_TIMEOUT:-20}
+      APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
+      DB_CONNECTION: ${DB_CONNECTION:-pgsql}
+      CACHE_STORE: ${CACHE_STORE:-redis}
+      SESSION_DRIVER: ${SESSION_DRIVER:-redis}
+      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
+      REDIS_QUEUE_RETRY_AFTER: 360
+      REDIS_LONG_QUEUE_RETRY_AFTER: 3900
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
-      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      FFMPEG_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
-      REVERB_APP_ID: ${REVERB_APP_ID}
-      REVERB_APP_KEY: ${REVERB_APP_KEY}
-      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      REVERB_APP_ID: ${REVERB_APP_ID:?REVERB_APP_ID must be set in .env}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:?REVERB_APP_KEY must be set in .env}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:?REVERB_APP_SECRET must be set in .env}
       REVERB_HOST: reverb
       REVERB_PORT: ${REVERB_PORT:-9000}
       REVERB_SCHEME: ${REVERB_SCHEME:-http}
@@ -332,45 +691,90 @@ services:
         condition: service_healthy
       seaweedfs:
         condition: service_started
-      seaweedfs-bootstrap:
-        condition: service_completed_successfully
       meilisearch:
         condition: service_healthy
       backend:
+        condition: service_healthy
+      ffmpeg:
         condition: service_healthy
     command: >
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
-        php artisan horizon
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
+        exec php artisan horizon
       '
+    volumes:
+      - ./scripts/healthcheck-worker.php:/opt/hive-healthcheck-worker.php:ro
+      - hive-app-backups:/var/www/html/storage/app/private/system-backups
+    healthcheck:
+      test: ["CMD", "php", "/opt/hive-healthcheck-worker.php", "horizon"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
+      - hive-production-data
 
-  # WebSocket Engine
-  reverb:
-    image: ghcr.io/mcmike2223/hive-os-backend:latest
-    container_name: hive-reverb
+  # Laravel scheduler (backups, trash purge, integrations sync, ...). The
+  # legacy stack ran this as hive-scheduler; it was lost in the Coolify move.
+  scheduler:
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-0e88096ee763792bfdfe3e97b0c01c32ce3d5ed1}
+    build:
+      context: ./ops/releases/combined-branches-20261018/backend
+    pull_policy: build
+    container_name: hive-scheduler
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
       APP_ENV: production
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
+      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
+      COPILOT_MODEL: ${COPILOT_MODEL:-qwen3.5:0.8b-q8_0}
+      COPILOT_REPLY_MAX_TOKENS: ${COPILOT_REPLY_MAX_TOKENS:-128}
+      COPILOT_PHRASING_MAX_TOKENS: ${COPILOT_PHRASING_MAX_TOKENS:-128}
+      COPILOT_PHRASING_TIMEOUT: ${COPILOT_PHRASING_TIMEOUT:-20}
+      APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
+      DB_CONNECTION: ${DB_CONNECTION:-pgsql}
+      CACHE_STORE: ${CACHE_STORE:-redis}
+      SESSION_DRIVER: ${SESSION_DRIVER:-redis}
+      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
+      REDIS_QUEUE_RETRY_AFTER: 360
+      REDIS_LONG_QUEUE_RETRY_AFTER: 3900
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
       DB_HOST: ${DB_INTERNAL_HOST:-db}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
       REDIS_CLIENT: predis
-      REDIS_HOST: ${REDIS_INTERNAL_HOST:-redis}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
+      MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      FFMPEG_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
-      REVERB_SERVER_HOST: 0.0.0.0
-      REVERB_SERVER_PORT: 9000
-      REVERB_APP_ID: ${REVERB_APP_ID}
-      REVERB_APP_KEY: ${REVERB_APP_KEY}
-      REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+      REVERB_APP_ID: ${REVERB_APP_ID:?REVERB_APP_ID must be set in .env}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:?REVERB_APP_KEY must be set in .env}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:?REVERB_APP_SECRET must be set in .env}
       REVERB_HOST: reverb
       REVERB_PORT: ${REVERB_PORT:-9000}
       REVERB_SCHEME: ${REVERB_SCHEME:-http}
@@ -386,51 +790,241 @@ services:
       sh -lc '
         mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
         (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
-        chmod -R ug+rwX storage bootstrap/cache &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
+        exec php artisan schedule:work
+      '
+    volumes:
+      - ./scripts/healthcheck-worker.php:/opt/hive-healthcheck-worker.php:ro
+      - hive-app-backups:/var/www/html/storage/app/private/system-backups
+    healthcheck:
+      test: ["CMD", "php", "/opt/hive-healthcheck-worker.php", "schedule:work"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - hive-network
+
+  # WebSocket Engine
+  reverb:
+    image: ghcr.io/techiveet/hive-os-backend:${HIVE_BACKEND_TAG:-0e88096ee763792bfdfe3e97b0c01c32ce3d5ed1}
+    build:
+      context: ./ops/releases/combined-branches-20261018/backend
+    pull_policy: build
+    container_name: hive-reverb
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
+      OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:0.8b-q8_0}
+      OLLAMA_EMBEDDING_MODEL: ${OLLAMA_EMBEDDING_MODEL:-embeddinggemma:300m-qat-q8_0}
+      COPILOT_PROVIDER: ${COPILOT_PROVIDER:-ollama}
+      COPILOT_MODEL: ${COPILOT_MODEL:-qwen3.5:0.8b-q8_0}
+      COPILOT_REPLY_MAX_TOKENS: ${COPILOT_REPLY_MAX_TOKENS:-128}
+      COPILOT_PHRASING_MAX_TOKENS: ${COPILOT_PHRASING_MAX_TOKENS:-128}
+      COPILOT_PHRASING_TIMEOUT: ${COPILOT_PHRASING_TIMEOUT:-20}
+      APP_URL: ${APP_URL:-https://hive-backend.techiveet.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://hive.techiveet.com}
+      DB_CONNECTION: ${DB_CONNECTION:-pgsql}
+      CACHE_STORE: ${CACHE_STORE:-redis}
+      SESSION_DRIVER: ${SESSION_DRIVER:-redis}
+      QUEUE_CONNECTION: ${QUEUE_CONNECTION:-redis}
+      REDIS_QUEUE_RETRY_AFTER: 360
+      REDIS_LONG_QUEUE_RETRY_AFTER: 3900
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      DB_HOST: ${DB_INTERNAL_HOST:-db}
+      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
+      REDIS_CLIENT: predis
+      REDIS_HOST: hive-stack-redis
+      REDIS_INTERNAL_HOST: hive-stack-redis
+      BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
+      REVERB_SERVER_HOST: 0.0.0.0
+      REVERB_SERVER_PORT: 9000
+      REVERB_APP_ID: ${REVERB_APP_ID:?REVERB_APP_ID must be set in .env}
+      REVERB_APP_KEY: ${REVERB_APP_KEY:?REVERB_APP_KEY must be set in .env}
+      REVERB_APP_SECRET: ${REVERB_APP_SECRET:?REVERB_APP_SECRET must be set in .env}
+      REVERB_HOST: reverb
+      REVERB_PORT: ${REVERB_PORT:-9000}
+      REVERB_SCHEME: ${REVERB_SCHEME:-http}
+      PUSHER_HOST: reverb
+    depends_on:
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    command: >
+      sh -lc '
+        mkdir -p storage/logs storage/framework/cache storage/framework/sessions storage/framework/views bootstrap/cache &&
+        (chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true) &&
+        (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan reverb:start --host=0.0.0.0 --port=9000
       '
     expose:
       - "9000"
+    healthcheck:
+      test: ["CMD-SHELL", "php -r 'exit((@fsockopen(\"hive-stack-redis\", 6379) && @fsockopen(\"127.0.0.1\", 9000)) ? 0 : 1);'"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     networks:
-      - hive-network
+      hive-network:
+        aliases:
+          - hive-reverb
+      # Must not be left null: Coolify's compose parser drops null-valued
+      # network mappings, which detached Reverb from the edge network and made
+      # hive-caddy's `reverse_proxy hive-reverb:9000` return 502.
+      hive-production-data:
+        aliases:
+          - hive-reverb
 
-  # Next.js Frontend
-  frontend:
-    image: ghcr.io/mcmike2223/hive-os-frontend:latest
-    container_name: hive-frontend
+  # Hive video authorization bridge. Only Laravel reaches this service.
+  video-backend:
+    build:
+      context: ./video-backend
+      dockerfile: Dockerfile
+    image: hive-video-backend:latest
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     env_file:
       - .env
     environment:
+      NODE_ENV: production
+      PORT: 5001
+      ALLOWED_ORIGINS: https://${FRONTEND_DOMAIN:-hive.techiveet.com}
+      FRONTEND_URL: https://${FRONTEND_DOMAIN:-hive.techiveet.com}
+      PUBLIC_FRONTEND_URL: https://${FRONTEND_DOMAIN:-hive.techiveet.com}
+      AUTH_TOKEN_SECRET: ${VIDEO_AUTH_TOKEN_SECRET:?VIDEO_AUTH_TOKEN_SECRET must be set in .env}
+      BILLING_WEBHOOK_SECRET: ${VIDEO_BILLING_WEBHOOK_SECRET:?VIDEO_BILLING_WEBHOOK_SECRET must be set in .env}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY must be set in .env}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET must be set in .env}
+      LIVEKIT_HTTP_URL: http://video-media:7880
+      LIVEKIT_WS_URL: wss://${VIDEO_DOMAIN:-hive-video.techiveet.com}
+      HIVE_VIDEO_SECRET: ${HIVE_VIDEO_SECRET:?HIVE_VIDEO_SECRET must be set in .env}
+    volumes:
+      - hive-video-data:/app/data
+    expose:
+      - "5001"
+    depends_on:
+      video-media:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - hive-network
+
+  # WebRTC signaling and SFU media plane. API/WebSocket traffic stays behind
+  # Caddy; only the ICE fallback and UDP media range are exposed on the host.
+  video-media:
+    image: livekit/livekit-server:v1.13.6
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7880/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses:
+          - "0.0.0.0"
+        rtc:
+          tcp_port: 7882
+          udp_port: 7883
+          use_external_ip: true
+        keys:
+          ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY must be set in .env}: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET must be set in .env}
+        logging:
+          level: info
+          json: true
+    ports:
+      - "7882:7882/tcp"
+      - "7883:7883/udp"
+    expose:
+      - "7880"
+    networks:
+      - hive-network
+      - hive-production-data
+
+  # Next.js Frontend
+  frontend:
+    image: ghcr.io/techiveet/hive-os-frontend:${HIVE_FRONTEND_TAG:-cac32730d5087ba476b95895bdfce2d8ed2c3155}
+    pull_policy: if_not_present
+    container_name: hive-frontend
+    restart: unless-stopped
+    # Leave native buffers/threads headroom above the explicit V8 old heap.
+    mem_limit: ${HIVE_FRONTEND_MEMORY_LIMIT:-1536m}
+    memswap_limit: ${HIVE_FRONTEND_MEMORY_SWAP_LIMIT:-2048m}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    env_file:
+      - .env
+    environment:
+      NODE_OPTIONS: ${HIVE_FRONTEND_NODE_OPTIONS:---max-old-space-size=1024}
       SERVER_IP: ${SERVER_IP:-}
-      ROOT_DOMAIN: ${ROOT_DOMAIN:-gulfingot.com}
-      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.gulfingot.com}
-      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.gulfingot.com}
-      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.gulfingot.com}
-      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.gulfingot.com}
-      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.gulfingot.com}
-      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.gulfingot.com}
-      DB_DOMAIN: ${DB_DOMAIN:-hive-db.gulfingot.com}
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL}
-      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL}
+      ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
+      FRONTEND_DOMAIN: ${FRONTEND_DOMAIN:-hive.techiveet.com}
+      BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
+      HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
+      MEILISEARCH_DOMAIN: ${MEILISEARCH_DOMAIN:-hive-search.techiveet.com}
+      REMBG_DOMAIN: ${REMBG_DOMAIN:-hive-rembg.techiveet.com}
+      GOTENBERG_DOMAIN: ${GOTENBERG_DOMAIN:-hive-docs.techiveet.com}
+      REDIS_DOMAIN: ${REDIS_DOMAIN:-hive-redis.techiveet.com}
+      DB_DOMAIN: ${DB_DOMAIN:-hive-db.techiveet.com}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://hive-backend.techiveet.com}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://hive.techiveet.com}
       NEXT_PUBLIC_CENTRAL_DOMAINS: ${NEXT_PUBLIC_CENTRAL_DOMAINS:-}
-      NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-gulfingot.com}
+      NEXT_PUBLIC_ROOT_DOMAIN: ${NEXT_PUBLIC_ROOT_DOMAIN:-techiveet.com}
       NEXT_PUBLIC_SERVER_IP: ${NEXT_PUBLIC_SERVER_IP:-}
-      NEXT_PUBLIC_FRONTEND_DOMAIN: ${NEXT_PUBLIC_FRONTEND_DOMAIN:-hive.gulfingot.com}
-      NEXT_PUBLIC_BACKEND_DOMAIN: ${NEXT_PUBLIC_BACKEND_DOMAIN:-hive-backend.gulfingot.com}
-      NEXT_PUBLIC_REVERB_DOMAIN: ${NEXT_PUBLIC_REVERB_DOMAIN:-hive-ws.gulfingot.com}
-      NEXT_PUBLIC_REVERB_APP_KEY: ${NEXT_PUBLIC_REVERB_APP_KEY}
-      NEXT_PUBLIC_REVERB_HOST: ${NEXT_PUBLIC_REVERB_HOST}
-      NEXT_PUBLIC_REVERB_PORT: ${NEXT_PUBLIC_REVERB_PORT}
-      NEXT_PUBLIC_REVERB_SCHEME: ${NEXT_PUBLIC_REVERB_SCHEME}
+      NEXT_PUBLIC_FRONTEND_DOMAIN: ${NEXT_PUBLIC_FRONTEND_DOMAIN:-hive.techiveet.com}
+      NEXT_PUBLIC_BACKEND_DOMAIN: ${NEXT_PUBLIC_BACKEND_DOMAIN:-hive-backend.techiveet.com}
+      NEXT_PUBLIC_REVERB_DOMAIN: ${NEXT_PUBLIC_REVERB_DOMAIN:-hive-ws.techiveet.com}
+      NEXT_PUBLIC_REVERB_APP_KEY: ${NEXT_PUBLIC_REVERB_APP_KEY:-${REVERB_APP_KEY}}
+      NEXT_PUBLIC_REVERB_HOST: ${NEXT_PUBLIC_REVERB_HOST:-reverb}
+      NEXT_PUBLIC_REVERB_PORT: ${NEXT_PUBLIC_REVERB_PORT:-9000}
+      NEXT_PUBLIC_REVERB_SCHEME: ${NEXT_PUBLIC_REVERB_SCHEME:-http}
       BACKEND_INTERNAL_URL: ${BACKEND_INTERNAL_URL:-http://backend:8000}
       FRONTEND_INTERNAL_URL: ${FRONTEND_INTERNAL_URL:-http://frontend:3000}
       REVERB_INTERNAL_URL: ${REVERB_INTERNAL_URL:-http://reverb:9000}
       QUEUE_INTERNAL_HOST: ${QUEUE_INTERNAL_HOST:-queue}
       DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
-      REDIS_INTERNAL_HOST: ${REDIS_INTERNAL_HOST:-redis}
+      REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       REMBG_INTERNAL_URL: ${REMBG_INTERNAL_URL:-http://rembg:5000}
       GOTENBERG_INTERNAL_URL: ${GOTENBERG_INTERNAL_URL:-http://gotenberg:3000}
@@ -452,27 +1046,126 @@ services:
       start_period: 30s
     networks:
       - hive-network
+      - hive-production-data
 
-  # Monitoring: Prometheus
+  # Monitoring: Prometheus. Always on (it used to sit behind the `ops`
+  # profile, so nothing evaluated the alert rules in production). Scrapes the
+  # backend's /metrics, which reports database, Redis, queue and backup health.
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.15.0
     container_name: hive-prometheus
     restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--storage.tsdb.retention.size=2GB'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./storage/prometheus-data:/prometheus
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      # Named volume: Prometheus runs as nobody and cannot write to a
+      # root-owned bind mount.
+      - hive-prometheus-data:/prometheus
     expose:
       - "9090"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/ready >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - hive-network
+
+  # Monitoring: alert delivery. Receivers come from ALERT_* in .env
+  # (see monitoring/alertmanager/render-config.sh).
+  alertmanager:
+    image: prom/alertmanager:v0.34.1
+    container_name: hive-alertmanager
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/etc/alertmanager-render/render-config.sh"]
+    environment:
+      ALERT_EMAIL_TO: ${ALERT_EMAIL_TO:-}
+      ALERT_SMTP_HOST: ${ALERT_SMTP_HOST:-}
+      ALERT_SMTP_FROM: ${ALERT_SMTP_FROM:-}
+      ALERT_SMTP_USERNAME: ${ALERT_SMTP_USERNAME:-}
+      ALERT_SMTP_PASSWORD: ${ALERT_SMTP_PASSWORD:-}
+      ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
+      ALERT_TELEGRAM_BOT_TOKEN: ${ALERT_TELEGRAM_BOT_TOKEN:-}
+      ALERT_TELEGRAM_CHAT_ID: ${ALERT_TELEGRAM_CHAT_ID:-}
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ./monitoring/alertmanager/render-config.sh:/etc/alertmanager-render/render-config.sh:ro
+      - hive-alertmanager-data:/alertmanager
+    expose:
+      - "9093"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9093/-/ready >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - hive-network
+
+  # Monitoring: HTTP probes for the backend and frontend (HiveBackendDown).
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.28.0
+    container_name: hive-blackbox-exporter
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/blackbox/blackbox.yml'
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      - ./monitoring/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    expose:
+      - "9115"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9115/metrics >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
   # Monitoring: Grafana Dashboard
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.2
     container_name: hive-grafana
     restart: unless-stopped
+    profiles:
+      - ops
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD must be set in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
@@ -486,30 +1179,66 @@ services:
 
   # Monitoring Exporter: Host Metrics
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.12.1
     container_name: hive-node-exporter
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 64M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
+      - /var/lib/node_exporter/textfile_collector:/var/lib/node_exporter/textfile_collector:ro
     command:
       - '--path.procfs=/host/proc'
       - '--path.sysfs=/host/sys'
+      - '--path.rootfs=/rootfs'
+      - '--collector.textfile.directory=/var/lib/node_exporter/textfile_collector'
       - '--collector.filesystem.ignored-mount-points=^/(sys|proc|dev|host|etc)($$|/)'
     expose:
       - "9100"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9100/metrics >/dev/null"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     networks:
       - hive-network
 
   # Monitoring Exporter: Container Metrics
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    image: ghcr.io/google/cadvisor:0.60.6@sha256:b8e7d1093144fd088f425ff003d75a4aa405de075db78dae3bc563730b1bd07a
     container_name: hive-cadvisor
     restart: unless-stopped
+    mem_limit: 256m
+    memswap_limit: 384m
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - --housekeeping_interval=30s
+      - --store_container_labels=false
+      - --docker_only=true
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
     volumes:
       - /:/rootfs:ro
-      - /var/run:/var/run:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Docker's containerd image store requires this exact socket for discovery.
+      # No public port, privileged mode or writable host filesystem is granted.
+      - /run/containerd/containerd.sock:/run/containerd/containerd.sock:ro
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
       - /dev/disk/:/dev/disk:ro
@@ -518,6 +1247,57 @@ services:
     networks:
       - hive-network
 
+  # Private dependency metrics. No host port or unauthenticated public route.
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.20.1@sha256:ac5ec343104fae0e2d84a27bb8d69b38430a11910c5382cad85d478d2bab713e
+    restart: unless-stopped
+    mem_limit: 128m
+    memswap_limit: 192m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DATA_SOURCE_URI: db:5432/${DB_DATABASE:-hive}?sslmode=disable
+      DATA_SOURCE_USER: ${DB_USERNAME:-hive}
+      DATA_SOURCE_PASS: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9187/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - hive-network
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.93.0-alpine@sha256:93831cd4d5d67687de67c9d5221b14312fea580af8d157583ed9d4459bf2dd70
+    restart: unless-stopped
+    mem_limit: 64m
+    memswap_limit: 128m
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      REDIS_ADDR: redis://hive-stack-redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9121/metrics"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 45s
+    networks:
+      - hive-network
+
+volumes:
+  hive-ollama-models:
+  hive-video-data:
+  # System backups written by the scheduler/queue and listed by the backend.
+  hive-app-backups:
+  hive-prometheus-data:
+  hive-alertmanager-data:
+
 networks:
   hive-network:
     driver: bridge
+  hive-production-data:
+    external: true
+    name: hive_hive-network

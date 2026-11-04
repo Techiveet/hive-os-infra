@@ -556,6 +556,36 @@ wait_for_service caddy
 DEPLOY_STEP="Validating Caddy config"
 validate_caddy_config
 
+# The stack answering is not the stack healthy: a deploy can leave a dependency
+# degraded, a pre-warmer wedged, or the pre-warmer contract broken and every
+# individual container would still look fine. The healthcheck asserts the full
+# contract — containers, endpoints, in-container dependencies, scheduler work,
+# object storage round-trip, and both pre-warmers' adaptive behaviour via their
+# harnesses. A deploy that breaks any of it FAILS here instead of silently
+# succeeding; SKIP_HEALTHCHECK_GATE=1 escapes for a known-partial deploy.
+if [ "${SKIP_HEALTHCHECK_GATE:-0}" != "1" ] && [ -f "$(dirname "$0")/healthcheck.sh" ]; then
+  DEPLOY_STEP="Running stack healthcheck gate"
+  echo "Running stack healthcheck gate..."
+  # Env assignments (not arguments) so the healthcheck's own defaults for every
+  # other knob still apply; -q keeps the deploy log to warnings/failures/summary.
+  # The profile matches docker-compose.prod.yml: Caddy is the edge (backend and
+  # frontend are only reachable through their public domains), the service set
+  # differs from the dev stack (no warmers/adminer/mailpit/ollama — the
+  # healthcheck skips checks whose backing service has no container), and the
+  # compose project name defaults to this checkout's directory name.
+  GATE_PROJECT="$(get_env_value COMPOSE_PROJECT_NAME)"
+  GATE_BACKEND_DOMAIN="$(get_env_value BACKEND_DOMAIN)"
+  GATE_FRONTEND_DOMAIN="$(get_env_value FRONTEND_DOMAIN)"
+  COMPOSE_PROJECT_NAME="${GATE_PROJECT:-$(basename "$(pwd)")}" \
+  CORE_SERVICES="caddy backend frontend queue scheduler reverb db redis meilisearch seaweedfs rembg ffmpeg gotenberg prometheus grafana node-exporter cadvisor" \
+  ONE_SHOT_SERVICES="seaweedfs-bootstrap" \
+  BACKEND_URL="https://${GATE_BACKEND_DOMAIN:-hive-backend.gulfingot.com}" \
+  FRONTEND_URL="https://${GATE_FRONTEND_DOMAIN:-hive.gulfingot.com}" \
+    "$(dirname "$0")/healthcheck.sh" -q
+else
+  echo "Skipping stack healthcheck gate."
+fi
+
 DEPLOY_STEP="Listing Compose services"
 compose ps
 

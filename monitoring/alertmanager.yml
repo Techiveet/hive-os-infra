@@ -1,0 +1,113 @@
+global:
+  resolve_timeout: 5m
+  smtp_smarthost: 'mailpit:1025'
+  smtp_from: 'alerts@hive-erp.com'
+  smtp_require_tls: false
+
+route:
+  group_by: ['alertname', 'service', 'environment']
+  group_wait: 2s
+  group_interval: 10s
+  repeat_interval: 4h
+  receiver: 'staging-mailpit'
+  routes:
+    # -------------------------------------------------------------
+    # Production Route: Real On-Call Operator Destination
+    # -------------------------------------------------------------
+    - matchers:
+        - environment = "production"
+      receiver: 'production-oncall-gateway'
+      continue: true
+
+    # -------------------------------------------------------------
+    # Staging / Local / Game-Day Route: Mailpit Inbox
+    # -------------------------------------------------------------
+    - matchers:
+        - environment =~ "staging|local|test"
+      receiver: 'staging-mailpit'
+
+inhibit_rules:
+  # Inhibit derivative database & API noise when PostgreSQL is completely down
+  - source_matchers:
+      - alertname = "PostgresDown"
+    target_matchers:
+      - alertname =~ "PostgresConnections.*|PostgresLockWait.*|High5xxRate|Critical5xxRate|ElevatedP95Latency|CriticalP95Latency"
+    equal: ['environment']
+
+  # Inhibit derivative queue backlog alerts when Redis is down
+  - source_matchers:
+      - alertname = "RedisDown"
+    target_matchers:
+      - alertname =~ "QueueBacklog.*|QueueOldestJob.*|RedisMemoryHigh"
+    equal: ['environment']
+
+receivers:
+  # =============================================================
+  # Real Production Operator On-Call Receiver (Webhook Gateway & Email)
+  # =============================================================
+  - name: 'production-oncall-gateway'
+    webhook_configs:
+      - url: 'http://alertmanager:9093/api/v2/alerts' # Self-looping audit endpoint or operator endpoint
+        send_resolved: true
+        max_alerts: 10
+    email_configs:
+      - to: 'ops-oncall@hive-erp.com, oncall-lead@hive-erp.local'
+        send_resolved: true
+        headers:
+          Subject: '[HIVE-PROD-ALERT-{{ .Status | toUpper }}] {{ .CommonLabels.severity | toUpper }} - {{ .CommonLabels.alertname }} ({{ .CommonLabels.service }})'
+        html: |
+          <!DOCTYPE html>
+          <html>
+          <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; padding: 20px;">
+            <div style="max-width: 650px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);">
+              <div style="background-color: {{ if eq .Status "firing" }}#dc2626{{ else }}#16a34a{{ end }}; padding: 16px 24px; color: #ffffff;">
+                <h2 style="margin: 0; font-size: 18px; font-weight: 700;">ðŸš¨ HIVE ERP PRODUCTION ON-CALL ALERT: {{ .Status | toUpper }}</h2>
+              </div>
+              <div style="padding: 24px;">
+                <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                  <tr>
+                    <td style="padding: 8px 0; color: #64748b; font-weight: 600; width: 140px;">Alert Name:</td>
+                    <td style="padding: 8px 0; color: #0f172a; font-weight: 700;">{{ .CommonLabels.alertname }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: #64748b; font-weight: 600;">Severity:</td>
+                    <td style="padding: 8px 0; color: {{ if eq .CommonLabels.severity "critical" }}#dc2626{{ else }}#d97706{{ end }}; font-weight: 700;">{{ .CommonLabels.severity | toUpper }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: #64748b; font-weight: 600;">Environment:</td>
+                    <td style="padding: 8px 0; color: #0f172a;">{{ .CommonLabels.environment }}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding: 8px 0; color: #64748b; font-weight: 600;">Service:</td>
+                    <td style="padding: 8px 0; color: #0f172a;">{{ .CommonLabels.service }}</td>
+                  </tr>
+                </table>
+                <div style="background-color: #f1f5f9; border-left: 4px solid #3b82f6; padding: 12px 16px; margin-bottom: 20px; border-radius: 0 4px 4px 0;">
+                  <p style="margin: 0 0 8px 0; font-weight: 600; color: #1e293b;">{{ .CommonAnnotations.summary }}</p>
+                  <p style="margin: 0; color: #475569; font-size: 14px;">{{ .CommonAnnotations.description }}</p>
+                </div>
+                {{ if .CommonAnnotations.runbook_url }}
+                <div style="margin-top: 24px; text-align: center;">
+                  <a href="{{ .CommonAnnotations.runbook_url }}" style="display: inline-block; background-color: #2563eb; color: #ffffff; padding: 10px 20px; text-decoration: none; border-radius: 6px; font-weight: 600; font-size: 14px;">ðŸ“– Open Production Incident Runbook</a>
+                </div>
+                {{ end }}
+              </div>
+            </div>
+          </body>
+          </html>
+
+  # =============================================================
+  # Staging / Local / Game-Day Receiver
+  # =============================================================
+  - name: 'staging-mailpit'
+    email_configs:
+      - to: 'staging-alerts@hive-erp.local'
+        send_resolved: true
+        headers:
+          Subject: '[HIVE-STAGING-ALERT-{{ .Status | toUpper }}] {{ .CommonLabels.severity | toUpper }} - {{ .CommonLabels.alertname }} ({{ .CommonLabels.service }})'
+        html: |
+          <h3>[STAGING ALERT {{ .Status | toUpper }}] {{ .CommonLabels.alertname }}</h3>
+          <p><strong>Severity:</strong> {{ .CommonLabels.severity }}</p>
+          <p><strong>Environment:</strong> {{ .CommonLabels.environment }}</p>
+          <p><strong>Summary:</strong> {{ .CommonAnnotations.summary }}</p>
+          <p><strong>Runbook:</strong> <a href="{{ .CommonAnnotations.runbook_url }}">{{ .CommonAnnotations.runbook_url }}</a></p>

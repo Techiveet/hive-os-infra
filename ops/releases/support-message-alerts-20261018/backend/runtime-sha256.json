@@ -1,0 +1,16 @@
+{
+  "Modules/Core/app/Http/Controllers/Dashboard/DashboardController.php": "2ee2cacd6ec11e3869f69e773efa22eadaaa8b3ec80aabc5d596db8f4bfdc787",
+  "Modules/Core/app/Support/ModuleRegistry.php": "8386640861d4ee2c7f9410b228f5c05e2b4ece1ebb79211896a24844fa047320",
+  "Modules/SupportBot/app/Http/Controllers/SupportBotEmbedController.php": "45adda98137914ee0a790c976f93939cd70a669d59e177c5ddb82a57d37cfc18",
+  "Modules/SupportBot/app/Models/SupportBot.php": "82dff940c8b28351ee5b043aebd1202ebb001aed299f5dcc9337ef7bce2b364d",
+  "Modules/SupportBot/app/Notifications/SupportInboxNotification.php": "7daeaf51e606105c168654f9bb2a6fccfb136dd6660e5a282dd0ad5640ca8c54",
+  "Modules/SupportBot/app/Providers/SupportBotServiceProvider.php": "6136d7569eb4b79a216cc93b3e9e5371e400c7a0183363cbcf7682ed6c25d015",
+  "Modules/SupportBot/app/Services/Copilot/CopilotAnswerSynthesizer.php": "8c70a7c34a79289fcbadfce2c6ee3805240a7f7c1eb3137253b5624bcb45f073",
+  "Modules/SupportBot/app/Services/Copilot/CopilotService.php": "fc9df54213d6adc4d7862c32236a5684bb71d3b7f9b04b6218d208c024a23ed8",
+  "Modules/SupportBot/app/Services/Copilot/ErpKnowledgeIndex.php": "667506c7ca57f5ea2075de4c1b4d894a19a7f1f24f799f894b0d357f49965640",
+  "Modules/SupportBot/app/Services/SupportBotEngineService.php": "4a885d363284687b5b08082e8c1784053a3c9f9bd9d06c542f84bac83427628d",
+  "Modules/SupportBot/app/Services/SupportBotKnowledgeService.php": "d9aaf95431bea1852befe7d301be45c87a5c8443602cc2360b89106947eb79e8",
+  "Modules/SupportBot/app/Services/SupportBotLlmService.php": "12bb5496e51d8e5535a4a5b3d268463ebe7bf857e5d340a0366546110cb137cf",
+  "Modules/SupportBot/app/Services/SupportInboxNotifier.php": "017817a8f1460ba5e16e865ab949415adce1e477c4828cef065ce58f53b78a7a",
+  "config/services.php": "73354b5922b24e8095c6216898050dc525799d2d602a383025b9a999fc305a2a"
+}

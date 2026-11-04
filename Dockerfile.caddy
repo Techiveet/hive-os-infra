@@ -10,3 +10,4 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM caddy:${CADDY_VERSION}-alpine
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+COPY Caddyfile /etc/caddy/Caddyfile

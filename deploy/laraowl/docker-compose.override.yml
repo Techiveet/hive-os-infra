@@ -1,0 +1,12 @@
+# Reset layer for the local LaraOwl deployment (hive-os-infra).
+#
+# Nulls out the upstream caddy ports/volumes so the LOCAL layer
+# (docker-compose.local.yml) can provide its own clean values.
+# Used with:
+#   docker compose -f laraowl/docker-compose.yaml \
+#     -f deploy/laraowl/docker-compose.override.yml \
+#     -f deploy/laraowl/docker-compose.local.yml up -d
+services:
+  caddy:
+    ports: !reset null
+    volumes: !reset null
