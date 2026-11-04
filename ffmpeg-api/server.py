@@ -196,6 +196,87 @@ def convert():
         )
 
 
+@app.post("/subtitle/convert")
+def convert_subtitle():
+    """Convert a timed subtitle file to WebVTT."""
+    if "file" not in request.files:
+        return error("No file provided")
+
+    f = request.files["file"]
+    input_ext = (f.filename or "subtitle.srt").rsplit(".", 1)[-1].lower()
+    if input_ext not in {"vtt", "srt", "ass", "ssa", "sub", "sbv", "ttml", "dfxp"}:
+        return error("Unsupported subtitle format")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, f"input.{input_ext}")
+        output_path = os.path.join(tmpdir, "output.vtt")
+        f.save(input_path)
+
+        ok, stderr = run_ffmpeg([
+            "-i", input_path,
+            "-f", "webvtt",
+            output_path,
+        ], timeout=60)
+        if not ok or not os.path.exists(output_path):
+            app.logger.warning("Subtitle conversion failed: %s", stderr[-500:])
+            return error("This subtitle could not be converted. Check that it contains valid timed captions.")
+
+        with open(output_path, "r", encoding="utf-8", errors="replace") as converted:
+            contents = converted.read()
+        if "-->" not in contents:
+            return error("This subtitle could not be converted. Check that it contains valid timed captions.")
+
+        return app.response_class(contents, mimetype="text/vtt")
+
+
+@app.post("/subtitle/extract")
+def extract_subtitles():
+    """Extract all timed text streams embedded in a video as WebVTT."""
+    if "file" not in request.files:
+        return error("No file provided")
+
+    f = request.files["file"]
+    input_ext = (f.filename or "video.mp4").rsplit(".", 1)[-1].lower()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, f"input.{input_ext}")
+        f.save(input_path)
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "s",
+             "-show_entries", "stream=index:stream_tags=language,title:stream_disposition=default",
+             "-of", "json", input_path],
+            capture_output=True, text=True, timeout=60,
+        )
+        if probe.returncode != 0:
+            return error("Unable to inspect the video subtitle streams.", 422)
+
+        import json
+        streams = json.loads(probe.stdout or "{}").get("streams", [])
+        tracks = []
+        for position, stream in enumerate(streams):
+            output_path = os.path.join(tmpdir, f"subtitle-{position}.vtt")
+            ok, stderr = run_ffmpeg([
+                "-i", input_path, "-map", f"0:{stream['index']}",
+                "-f", "webvtt", output_path,
+            ], timeout=120)
+            if not ok:
+                app.logger.warning("Embedded subtitle extraction failed: %s", stderr[-500:])
+                continue
+            with open(output_path, "r", encoding="utf-8", errors="replace") as extracted:
+                contents = extracted.read()
+            if "-->" not in contents:
+                continue
+            tags = stream.get("tags") or {}
+            tracks.append({
+                "language": tags.get("language") or "und",
+                "label": tags.get("title") or tags.get("language") or f"Subtitle {position + 1}",
+                "default": bool((stream.get("disposition") or {}).get("default", position == 0)),
+                "contents": contents,
+            })
+
+        return jsonify({"tracks": tracks})
+
+
 @app.post("/thumbnail")
 def thumbnail():
     """

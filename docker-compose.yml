@@ -97,7 +97,7 @@ services:
       - hive-network
 
   seaweedfs-bootstrap:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: hive-seaweedfs-bootstrap
     depends_on:
       seaweedfs:
@@ -220,6 +220,8 @@ services:
         condition: service_completed_successfully
       ffmpeg:
         condition: service_healthy
+      gotenberg:
+        condition: service_started
     command: php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
     networks:
       hive-network:
@@ -247,6 +249,7 @@ services:
       DB_USERNAME: hive
       DB_PASSWORD: password
       REDIS_HOST: redis
+      CACHE_STORE: redis
       QUEUE_CONNECTION: redis
       REVERB_APP_ID: "326162"
       REVERB_APP_KEY: "uq8zbsjhgcajsmdiwhc8"
@@ -478,8 +481,6 @@ services:
   gotenberg:
     image: gotenberg/gotenberg:8
     container_name: hive-gotenberg
-    profiles:
-      - docs
     restart: unless-stopped
     ports:
       - "3030:3000" # Mapped to 3030 on the host machine to prevent port collision with Next.js
