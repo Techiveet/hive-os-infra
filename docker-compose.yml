@@ -192,6 +192,7 @@ services:
       DB_PASSWORD: password
       OCTANE_SERVER: roadrunner
       SCOUT_DRIVER: meilisearch
+      SCOUT_QUEUE: "true"
       MEILISEARCH_HOST: http://meilisearch:7700
       MEILISEARCH_KEY: ${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       REDIS_HOST: redis
@@ -388,6 +389,7 @@ services:
       DB_USERNAME: hive
       DB_PASSWORD: password
       SCOUT_DRIVER: meilisearch
+      SCOUT_QUEUE: "true"
       MEILISEARCH_HOST: http://meilisearch:7700
       MEILISEARCH_KEY: ${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       REDIS_HOST: redis
@@ -468,6 +470,7 @@ services:
       DB_PASSWORD: password
       OCTANE_SERVER: roadrunner
       SCOUT_DRIVER: meilisearch
+      SCOUT_QUEUE: "true"
       MEILISEARCH_HOST: http://meilisearch:7700
       MEILISEARCH_KEY: ${MEILISEARCH_KEY:?MEILISEARCH_KEY must be set in .env}
       REDIS_HOST: redis
