@@ -128,7 +128,8 @@ main() {
   fi
 
   step "1. Stop long-lived workers (they hold persistent Postgres connections)"
-  run docker stop "${BACKEND_CONTAINER}" hive-queue hive-scheduler
+  run docker stop "${BACKEND_CONTAINER}" hive-queue hive-scheduler hive-reverb || true
+  psql_db postgres "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '${DB_NAME}' AND pid <> pg_backend_pid();" || true
 
   step "2. Reset the central database (${DB_NAME})"
   run psql_db postgres "DROP DATABASE IF EXISTS ${DB_NAME};"
@@ -146,7 +147,7 @@ main() {
   run docker exec "${BACKEND_CONTAINER}" php artisan db:seed --force
 
   step "6. Bring the workers back and verify"
-  run docker start hive-queue hive-scheduler
+  run docker start hive-queue hive-scheduler hive-reverb
 
   maybe_verify
   echo "Done."

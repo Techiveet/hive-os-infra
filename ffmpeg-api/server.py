@@ -12,6 +12,7 @@ Endpoints:
 
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
@@ -533,8 +534,11 @@ def convert():
     f = request.files["file"]
     output_format = (request.form.get("output_format") or "mp4").lower().strip(".")
     mode = request.form.get("mode", "video").lower()
-    quality = min(100, max(1, int(request.form.get("quality", 80))))
-    resolution = request.form.get("resolution", "")
+    quality = bounded_int(request.form.get("quality"), 80, 1, 100)
+    resolution = (request.form.get("resolution") or "").strip()
+
+    if resolution and not re.fullmatch(r"\d{2,4}x\d{2,4}", resolution):
+        return error("Invalid resolution format. Expected WIDTHxHEIGHT (e.g. 1280x720).", 422)
 
     # Validate
     input_ext = (f.filename or "").rsplit(".", 1)[-1].lower()
@@ -649,9 +653,12 @@ def thumbnail():
         return error("No file provided")
 
     f = request.files["file"]
-    timestamp = request.form.get("timestamp", "00:00:01")
-    width = request.form.get("width", "640")
+    timestamp = (request.form.get("timestamp") or "00:00:01").strip()
+    width = bounded_int(request.form.get("width"), 640, 16, 3840)
     fmt = request.form.get("format", "jpg").lower()
+
+    if not re.fullmatch(r"\d+(?:\.\d+)?|\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?", timestamp):
+        return error("Invalid timestamp format.", 422)
 
     if fmt not in ("jpg", "jpeg", "png", "webp"):
         return error("Unsupported thumbnail format")
@@ -699,7 +706,7 @@ def extract_audio():
 
     f = request.files["file"]
     output_format = request.form.get("output_format", "mp3").lower()
-    bitrate = request.form.get("bitrate", "192")
+    bitrate = str(bounded_int(request.form.get("bitrate"), 192, 32, 320))
 
     if output_format not in ALLOWED_AUDIO_OUT:
         return error(f"Unsupported audio format: {output_format}")
@@ -755,10 +762,12 @@ def make_gif():
         return error("No file provided")
 
     f = request.files["file"]
-    fps = int(request.form.get("fps", 10))
-    width = int(request.form.get("width", 480))
-    start = request.form.get("start", "0")
-    duration = int(request.form.get("duration", 10))
+    fps = bounded_int(request.form.get("fps"), 10, 1, 30)
+    width = bounded_int(request.form.get("width"), 480, 32, 1920)
+    start = (request.form.get("start") or "0").strip()
+    duration = bounded_int(request.form.get("duration"), 10, 1, 60)
+    if not re.fullmatch(r"\d+(?:\.\d+)?|\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?", start):
+        return error("Invalid start timestamp format.", 422)
     input_ext = (f.filename or "video.mp4").rsplit(".", 1)[-1].lower()
 
     with tempfile.TemporaryDirectory() as tmpdir:

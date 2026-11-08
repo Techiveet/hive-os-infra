@@ -23,7 +23,7 @@ services:
     # per table, index and sequence. The default of 64 runs out of shared
     # memory ("increase max_locks_per_transaction") once the module schema
     # grows, failing every Hospitality suite in CI.
-    command: ["postgres", "-c", "max_locks_per_transaction=512"]
+    command: ["postgres", "-c", "max_locks_per_transaction=512", "-c", "max_connections=300"]
     ports:
       - "127.0.0.1:5439:5432"
     environment:
@@ -41,6 +41,36 @@ services:
       hive-network:
         aliases:
           - pgsql
+
+  # 2b. CONNECTION POOLER (PgBouncer — transaction pooling across central + tenant DBs)
+  pgbouncer:
+    build:
+      context: ./pgbouncer
+      dockerfile: Dockerfile
+    image: hive-pgbouncer:latest
+    container_name: hive-pgbouncer
+    restart: unless-stopped
+    environment:
+      DB_UPSTREAM_HOST: db
+      DB_UPSTREAM_PORT: 5432
+      DB_USERNAME: hive
+      DB_PASSWORD: password
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 1000
+      PGBOUNCER_DEFAULT_POOL_SIZE: 20
+      PGBOUNCER_MAX_DB_CONNECTIONS: 50
+      PGBOUNCER_MAX_USER_CONNECTIONS: 250
+      PGBOUNCER_MAX_PREPARED_STATEMENTS: 200
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U hive -d hive"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - hive-network
 
   # 3. SEARCH (Meilisearch)
   meilisearch:
@@ -158,6 +188,7 @@ services:
     build:
       context: ../hive-os-backend
       dockerfile: Dockerfile
+    image: hive-backend:latest
     container_name: hive-backend
     restart: unless-stopped
     # Rebuild the Laradocs search index on boot (see ../hive-os-backend/docker/entrypoint.sh)
@@ -167,7 +198,7 @@ services:
     # WSL bind mounts don't honor the exec bit, so run the script via sh.
     entrypoint: ["sh", "/var/www/html/docker/entrypoint.sh"]
     ports:
-      - "127.0.0.1:8081:8000"
+      - "8081:8000"
     volumes:
       - ../hive-os-backend:/var/www/html
       - hive-backend-storage:/var/www/html/storage
@@ -182,7 +213,7 @@ services:
       APP_URL: http://localhost:8081
       FRONTEND_URL: http://localhost:3001
       DB_CONNECTION: pgsql
-      DB_HOST: db
+      DB_HOST: pgbouncer
       DB_PORT: 5432
       DB_DATABASE: hive
       DB_USERNAME: hive
@@ -233,6 +264,8 @@ services:
       redis:
         condition: service_healthy
       db:
+        condition: service_healthy
+      pgbouncer:
         condition: service_healthy
       meilisearch:
         condition: service_healthy
@@ -292,6 +325,8 @@ services:
   backend-warmup:
     image: node:22-alpine
     container_name: hive-backend-warmup
+    profiles:
+      - warmup
     restart: unless-stopped
     depends_on:
       backend:
@@ -364,11 +399,10 @@ services:
 
   # 8. THE WORKER (Background Jobs)
   queue:
-    build:
-      context: ../hive-os-backend
-      dockerfile: Dockerfile
+    image: hive-backend:latest
     container_name: hive-queue
     restart: unless-stopped
+    entrypoint: ["sh", "/var/www/html/docker/entrypoint.sh"]
     volumes:
       - ../hive-os-backend:/var/www/html
       - hive-backend-storage:/var/www/html/storage
@@ -378,7 +412,7 @@ services:
       LARAOWL_ENABLED: "${LARAOWL_ENABLED:-false}"
       APP_KEY: base64:c29tZXJhbmRvbXN0cmluZ2ZvcmRldmVsb3BtZW50MjE=
       DB_CONNECTION: pgsql
-      DB_HOST: db
+      DB_HOST: pgbouncer
       DB_DATABASE: hive
       DB_USERNAME: hive
       DB_PASSWORD: password
@@ -422,6 +456,8 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
       meilisearch:
         condition: service_healthy
       seaweedfs:
@@ -445,18 +481,17 @@ services:
 
   # 8b. THE SCHEDULER (Laravel Scheduler)
   scheduler:
-    build:
-      context: ../hive-os-backend
-      dockerfile: Dockerfile
+    image: hive-backend:latest
     container_name: hive-scheduler
     restart: unless-stopped
+    entrypoint: ["sh", "/var/www/html/docker/entrypoint.sh"]
     environment:
       APP_NAME: "Hive ERP"
       APP_ENV: local
       LARAOWL_ENABLED: "${LARAOWL_ENABLED:-false}"
       APP_KEY: base64:c29tZXJhbmRvbXN0cmluZ2ZvcmRldmVsb3BtZW50MjE=
       DB_CONNECTION: pgsql
-      DB_HOST: db
+      DB_HOST: pgbouncer
       DB_PORT: 5432
       DB_DATABASE: hive
       DB_USERNAME: hive
@@ -504,6 +539,8 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
       seaweedfs:
         condition: service_started
       seaweedfs-bootstrap:
@@ -530,6 +567,7 @@ services:
     build:
       context: ../hive-os-frontend
       dockerfile: Dockerfile
+    image: hive-frontend:latest
     container_name: hive-frontend
     restart: unless-stopped
     # Run the mounted entrypoint rather than the copy baked into the image, so
@@ -537,7 +575,7 @@ services:
     # without an image rebuild.
     entrypoint: ["sh", "/app/docker-entrypoint.sh"]
     ports:
-      - "127.0.0.1:3001:3000"
+      - "3001:3000"
     volumes:
       - ../hive-os-frontend:/app
     environment:
@@ -585,6 +623,8 @@ services:
   frontend-warmup:
     image: node:22-alpine
     container_name: hive-frontend-warmup
+    profiles:
+      - warmup
     restart: unless-stopped
     depends_on:
       frontend:
@@ -657,11 +697,10 @@ services:
 
   # 🚀 11. WEBSOCKET ENGINE (Reverb)
   reverb:
-    build:
-      context: ../hive-os-backend
-      dockerfile: Dockerfile
+    image: hive-backend:latest
     container_name: hive-reverb
     restart: unless-stopped
+    entrypoint: ["sh", "/var/www/html/docker/entrypoint.sh"]
     ports:
       - "127.0.0.1:9095:9000" # Expose Reverb to your local browser
     volumes:
@@ -673,7 +712,7 @@ services:
       LARAOWL_ENABLED: "${LARAOWL_ENABLED:-false}"
       APP_KEY: base64:c29tZXJhbmRvbXN0cmluZ2ZvcmRldmVsb3BtZW50MjE=
       DB_CONNECTION: pgsql
-      DB_HOST: db
+      DB_HOST: pgbouncer
       DB_DATABASE: hive
       DB_USERNAME: hive
       DB_PASSWORD: password
@@ -702,6 +741,8 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
       seaweedfs:
         condition: service_started
       seaweedfs-bootstrap:
@@ -724,6 +765,7 @@ services:
     build:
       context: ./ffmpeg-api
       dockerfile: Dockerfile
+    image: hive-ffmpeg:latest
     container_name: hive-ffmpeg
     restart: unless-stopped
     ports:
@@ -769,6 +811,8 @@ services:
   ollama:
     image: ollama/ollama:latest
     container_name: hive-ollama
+    profiles:
+      - ai
     restart: unless-stopped
     ports:
       # Exposed for `ollama pull` from the host. The backend reaches it over the

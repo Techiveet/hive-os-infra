@@ -91,6 +91,7 @@ services:
     image: postgres:17-alpine
     container_name: hive-db
     restart: unless-stopped
+    command: ["postgres", "-c", "max_locks_per_transaction=512", "-c", "max_connections=300"]
     deploy:
       resources:
         limits:
@@ -126,6 +127,55 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Database Connection Pooler (PgBouncer — transaction pooling across central + tenant DBs)
+  pgbouncer:
+    build:
+      context: ./pgbouncer
+      dockerfile: Dockerfile
+    image: hive-pgbouncer:latest
+    container_name: hive-pgbouncer
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+    env_file:
+      - .env
+    environment:
+      DB_UPSTREAM_HOST: db
+      DB_UPSTREAM_PORT: 5432
+      DB_USERNAME: ${DB_USERNAME:-hive}
+      DB_PASSWORD: ${DB_PASSWORD}
+      PGBOUNCER_POOL_MODE: ${PGBOUNCER_POOL_MODE:-transaction}
+      PGBOUNCER_MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-1000}
+      PGBOUNCER_DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-20}
+      PGBOUNCER_MAX_DB_CONNECTIONS: ${PGBOUNCER_MAX_DB_CONNECTIONS:-50}
+      PGBOUNCER_MAX_USER_CONNECTIONS: ${PGBOUNCER_MAX_USER_CONNECTIONS:-250}
+      PGBOUNCER_MAX_PREPARED_STATEMENTS: ${PGBOUNCER_MAX_PREPARED_STATEMENTS:-200}
+    expose:
+      - "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -p 5432 -U ${DB_USERNAME:-hive} -d ${DB_DATABASE:-hive}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    networks:
+      - hive-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   # PostgreSQL Backup Sidecar
   db-backup:
     image: prodrigestivill/postgres-backup-local:17-alpine
@@ -138,6 +188,8 @@ services:
       - POSTGRES_DB=${DB_DATABASE:-hive}
       - POSTGRES_USER=${DB_USERNAME:-hive}
       - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_CLUSTER=TRUE
+      - SCHEDULE=${DB_BACKUP_SCHEDULE:-@daily}
       - BACKUP_KEEP_DAYS=7
       - BACKUP_KEEP_WEEKS=4
       - BACKUP_KEEP_MONTHS=6
@@ -415,6 +467,7 @@ services:
       - .env
     volumes:
       - ./storage/app-storage:/var/www/html/storage
+      - ./storage/db-backups:/var/www/html/storage/backups:ro
     logging:
       driver: "json-file"
       options:
@@ -438,8 +491,8 @@ services:
       FRONTEND_INTERNAL_URL: ${FRONTEND_INTERNAL_URL:-http://frontend:3000}
       REVERB_INTERNAL_URL: ${REVERB_INTERNAL_URL:-http://reverb:9000}
       QUEUE_INTERNAL_HOST: ${QUEUE_INTERNAL_HOST:-queue}
-      DB_HOST: ${DB_INTERNAL_HOST:-db}
-      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
+      DB_HOST: ${DB_INTERNAL_HOST:-pgbouncer}
+      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-pgbouncer}
       REDIS_CLIENT: predis
       REDIS_HOST: hive-stack-redis
       REDIS_INTERNAL_HOST: hive-stack-redis
@@ -462,6 +515,8 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
       seaweedfs:
         condition: service_started
       seaweedfs-bootstrap:
@@ -481,7 +536,10 @@ services:
         (chmod -R ug+rwX storage bootstrap/cache 2>/dev/null || true) &&
         php artisan optimize:clear &&
         php artisan config:cache &&
-        php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
+        php artisan route:cache &&
+        php artisan view:cache &&
+        php artisan event:cache &&
+        php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000 --max-requests=500
       '
     expose:
       - "8000"
@@ -509,6 +567,7 @@ services:
       - .env
     volumes:
       - ./storage/app-storage:/var/www/html/storage
+      - ./storage/db-backups:/var/www/html/storage/backups:ro
     logging:
       driver: "json-file"
       options:
@@ -521,8 +580,8 @@ services:
       BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
       REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
       HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
-      DB_HOST: ${DB_INTERNAL_HOST:-db}
-      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
+      DB_HOST: ${DB_INTERNAL_HOST:-pgbouncer}
+      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-pgbouncer}
       REDIS_CLIENT: predis
       REDIS_HOST: hive-stack-redis
       REDIS_INTERNAL_HOST: hive-stack-redis
@@ -541,6 +600,8 @@ services:
       redis:
         condition: service_healthy
       db:
+        condition: service_healthy
+      pgbouncer:
         condition: service_healthy
       seaweedfs:
         condition: service_started
@@ -581,8 +642,8 @@ services:
       BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
       REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
       HORIZON_DOMAIN: ${HORIZON_DOMAIN:-hive-queue.techiveet.com}
-      DB_HOST: ${DB_INTERNAL_HOST:-db}
-      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
+      DB_HOST: ${DB_INTERNAL_HOST:-pgbouncer}
+      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-pgbouncer}
       REDIS_CLIENT: predis
       REDIS_HOST: hive-stack-redis
       REDIS_INTERNAL_HOST: hive-stack-redis
@@ -601,6 +662,8 @@ services:
         condition: service_healthy
       db:
         condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
       seaweedfs:
         condition: service_started
       seaweedfs-bootstrap:
@@ -611,6 +674,7 @@ services:
         condition: service_healthy
     volumes:
       - ./storage/app-storage:/var/www/html/storage
+      - ./storage/db-backups:/var/www/html/storage/backups:ro
     logging:
       driver: "json-file"
       options:
@@ -640,6 +704,7 @@ services:
       - .env
     volumes:
       - ./storage/app-storage:/var/www/html/storage
+      - ./storage/db-backups:/var/www/html/storage/backups:ro
     logging:
       driver: "json-file"
       options:
@@ -650,8 +715,8 @@ services:
       ROOT_DOMAIN: ${ROOT_DOMAIN:-techiveet.com}
       BACKEND_DOMAIN: ${BACKEND_DOMAIN:-hive-backend.techiveet.com}
       REVERB_DOMAIN: ${REVERB_DOMAIN:-hive-ws.techiveet.com}
-      DB_HOST: ${DB_INTERNAL_HOST:-db}
-      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-db}
+      DB_HOST: ${DB_INTERNAL_HOST:-pgbouncer}
+      DB_INTERNAL_HOST: ${DB_INTERNAL_HOST:-pgbouncer}
       REDIS_CLIENT: predis
       REDIS_HOST: hive-stack-redis
       REDIS_INTERNAL_HOST: hive-stack-redis
@@ -669,6 +734,8 @@ services:
       redis:
         condition: service_healthy
       db:
+        condition: service_healthy
+      pgbouncer:
         condition: service_healthy
       backend:
         condition: service_healthy

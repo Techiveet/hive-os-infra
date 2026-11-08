@@ -21,7 +21,7 @@
 		# 'unsafe-eval' is retained because the editor (Monaco) and WASM tooling
 		# (pdfjs, ffmpeg, background-removal) require it; migrate to nonce + 'wasm-unsafe-eval'
 		# once the frontend emits per-request nonces.
-		Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https://*.{$ROOT_DOMAIN:gulfingot.com}; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.{$ROOT_DOMAIN:gulfingot.com} wss://*.{$ROOT_DOMAIN:gulfingot.com}; worker-src 'self' blob:; frame-src 'self' blob: https://www.google.com https://maps.google.com; upgrade-insecure-requests;"
+		Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https://*.{$ROOT_DOMAIN:techiveet.com}; font-src 'self' data: https://fonts.gstatic.com; connect-src 'self' https://*.{$ROOT_DOMAIN:techiveet.com} wss://*.{$ROOT_DOMAIN:techiveet.com}; worker-src 'self' blob:; frame-src 'self' blob: https://www.google.com https://maps.google.com; upgrade-insecure-requests;"
 
 		# Remove identifying headers
 		-X-Powered-By
