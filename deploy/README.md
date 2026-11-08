@@ -29,8 +29,10 @@ journalctl -u hive-autodeploy.service -n 50      # systemd logs
 tail -f storage/logs/auto-deploy.log             # deploy output
 ```
 
-The deployer is idempotent and single-instance (flock). It only redeploys a service
-when its image ID actually changes; otherwise it logs `no change` and exits.
+The deployer uses a single-instance lock and compares running image IDs.
+Before replacing backend services, it runs the candidate's backup and migration
+command. A failure stops that rollout. Migrations must remain compatible with
+the running image until the candidate starts.
 
 > Infra changes (compose / Caddyfile) are **not** image-based and are still applied
 > manually — copy the changed files into `/root/projects/hive` and run

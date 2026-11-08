@@ -59,10 +59,17 @@ echo "prod-gate: project=$PROJECT compose=$COMPOSE_FILES env=$ENV_FILE"
 # Read straight from the stack's own definition, so a service added to
 # docker-compose.prod.vps.yml is required by the next gate run automatically.
 ONE_SHOT_SERVICES="${ONE_SHOT_SERVICES:-seaweedfs-bootstrap}"
-mapfile -t ALL_SERVICES < <(
-    COMPOSE_PROFILES="" docker compose -p "$PROJECT" -f $COMPOSE_FILES --env-file "$ENV_FILE" config --services 2>/dev/null | sort
-)
-if ((${#ALL_SERVICES[@]} == 0)); then
+if ! required_services="$(
+    docker compose -p "$PROJECT" -f $COMPOSE_FILES --env-file "$ENV_FILE" config --format json |
+        python3 -c 'import json, sys
+services = json.load(sys.stdin)["services"]
+print("\n".join(sorted(name for name, service in services.items() if not service.get("profiles"))))'
+)"; then
+    echo "prod-gate: could not list services from the compose file" >&2
+    exit 2
+fi
+mapfile -t ALL_SERVICES <<<"$required_services"
+if [[ -z "$required_services" ]]; then
     echo "prod-gate: could not list services from the compose file" >&2
     exit 2
 fi

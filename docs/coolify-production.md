@@ -139,6 +139,10 @@ For Hive itself:
 - In-app backups (Settings > Backups) now include every workspace database
   and are kept in the `hive-app-backups` volume, which survives redeploys.
   `BACKUP_DISKS=local,backups` also copies them to `BACKUP_S3_*`.
+- The checked-in PostgreSQL command configures logical backups separately
+  from database startup. To meet a point-in-time recovery objective, configure
+  continuous WAL archiving to off-host storage and verify an actual replay
+  against the release's recovery objective.
 
 A backup that has never been restored is not a backup. At least monthly,
 restore the latest dump into a scratch Postgres and check a workspace:
@@ -146,8 +150,9 @@ restore the latest dump into a scratch Postgres and check a workspace:
 ```bash
 docker run -d --name hive-restore-check -e POSTGRES_PASSWORD=check postgres:17-alpine
 sleep 10
+set -o pipefail
 gunzip -c /root/projects/hive/storage/db-backups/last/*-latest.sql.gz \
-  | docker exec -i hive-restore-check psql -q -U postgres -d postgres
+  | docker exec -i hive-restore-check psql -Xq -v ON_ERROR_STOP=1 -U postgres -d postgres
 docker exec hive-restore-check psql -U postgres -l   # every tenant<id> database is listed
 docker rm -f hive-restore-check
 ```
@@ -181,18 +186,36 @@ ssh root@78.47.138.239 'cd /data/coolify/applications/z140ve7ehjoyuoluqk0azmwe &
 
 It derives the compose project, `docker-compose.prod.vps.yml` and the
 generated `.env` from the running containers' labels, takes the required
-service set from `docker compose config --services` (minus the one-shots),
+service set from the rendered Compose configuration (excluding profiled
+services and one-shots),
 and skips endpoints with no host-reachable address (seaweedfs, livekit —
 their containers are checked in-container instead). Exit 0 = the stack is
 healthy. Running it while a Coolify deploy is recreating containers gives
 false failures — wait for the deploy to finish first.
 
-## Rolling back
+## Pinning and rolling back app images
 
-CI pushes every build as `:latest` and as `:<commit sha>`. To roll back, set
-`HIVE_BACKEND_TAG` and/or `HIVE_FRONTEND_TAG` to the previous commit's SHA in
-Coolify and redeploy; set them back to `latest` afterwards. A rollback across
-a migration may also need that migration reverted.
+Backend CI publishes the commit tag and updates `:latest` on main after the
+PHPUnit suite and the candidate image scan pass. Set `HIVE_BACKEND_IMAGE` and
+`HIVE_FRONTEND_IMAGE` to the tested full image references, such as
+`ghcr.io/techiveet/hive-os-backend@sha256:<digest>`. These take precedence over
+`HIVE_BACKEND_TAG` and `HIVE_FRONTEND_TAG`. To roll back, restore the previous
+image references and redeploy. A rollback across a migration may also require
+a database restore or a compatible schema.
+
+Backend CI publishes images on main pushes. To trigger a Coolify rollout from
+backend CI, use the workflow's manual dispatch after setting the tested image
+references in Coolify.
+
+## Browser session rollout
+
+Production browser auth cookies now use host-only `__Host-` names. Users
+with legacy browser sessions may need to sign in again. The API expires
+legacy cookies it receives on the current host and configured session
+domain. Existing bearer tokens expire on their configured schedule and
+should be revoked if a sibling host may have received them. Use
+`CORS_ALLOWED_ORIGINS` for exact trusted cross-origin frontends. Tenant
+frontends normally call the API on their own origin.
 
 ## Known limits of this setup
 

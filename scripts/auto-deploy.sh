@@ -24,44 +24,55 @@ COMPOSE="docker compose -f docker-compose.prod.yml"
 BIMG=ghcr.io/techiveet/hive-os-backend:latest
 FIMG=ghcr.io/techiveet/hive-os-frontend:latest
 
-b_run=$(docker inspect --format '{{.Image}}' hive-backend 2>/dev/null)
-f_run=$(docker inspect --format '{{.Image}}' hive-frontend 2>/dev/null)
+running_image() {
+  docker inspect --format '{{.Image}}' "$1" 2>/dev/null
+}
 
-# refresh manifests (cheap when unchanged). Do NOT silence this: a failed pull
-# (expired GHCR login, full disk, etc.) must be visible in the log, otherwise the
-# digest comparison below just sees the stale local image and reports "no change"
-# forever — hiding a broken registry login behind a healthy-looking deploy loop.
+f_run=$(running_image hive-frontend)
+
+# Refresh both images before attempting a rollout.
 if ! $COMPOSE pull backend frontend; then
-  echo ">> WARNING: 'compose pull' failed (registry auth / disk / network?) — falling back to whatever images are already local. Run 'docker login ghcr.io' if this is an auth error."
+  echo ">> DEPLOY FAILED: could not pull both release images"
+  exit 1
 fi
 
-b_new=$(docker image inspect "$BIMG" --format '{{.Id}}' 2>/dev/null)
-f_new=$(docker image inspect "$FIMG" --format '{{.Id}}' 2>/dev/null)
+if ! b_new=$(docker image inspect "$BIMG" --format '{{.Id}}') ||
+   ! f_new=$(docker image inspect "$FIMG" --format '{{.Id}}') ||
+   [ -z "$b_new" ] || [ -z "$f_new" ]; then
+  echo ">> DEPLOY FAILED: could not identify both candidate images"
+  exit 1
+fi
 
-if [ -n "$b_new" ] && [ "$b_run" != "$b_new" ]; then
-  echo ">> backend changed ${b_run:0:19} -> ${b_new:0:19}; deploying"
-  $COMPOSE up -d backend queue reverb scheduler
-  for i in $(seq 1 24); do
-    [ "$(docker inspect --format '{{.State.Health.Status}}' hive-backend 2>/dev/null)" = healthy ] && break
-    sleep 5
-  done
-  $COMPOSE exec -T backend php artisan storage:link || true
-  $COMPOSE exec -T backend php artisan optimize:clear
-  $COMPOSE exec -T backend php artisan migrate --force
-  $COMPOSE exec -T backend php artisan tenants:migrate --force
-  $COMPOSE exec -T backend php artisan hive:sync-system-access --force || true
-  $COMPOSE exec -T backend php artisan config:cache
-  $COMPOSE exec -T backend mkdir -p /var/www/html/Modules/Subscription/app/resources/views || true
-  $COMPOSE exec -T backend php artisan view:cache
-  $COMPOSE exec -T backend php artisan octane:reload || true
+backend_changed=false
+for service in backend queue reverb scheduler; do
+  if [ "$(running_image "hive-$service")" != "$b_new" ]; then
+    backend_changed=true
+    break
+  fi
+done
+
+if [ "$backend_changed" = true ]; then
+  echo ">> backend services differ from ${b_new:0:19}; deploying"
+  # Back up and migrate with the candidate image before replacing the live services.
+  if ! $COMPOSE run --rm --no-deps --pull never -T backend php artisan hive:deploy --force; then
+    echo ">> DEPLOY FAILED: candidate backup, migration or seeding failed"
+    exit 1
+  fi
+  if ! $COMPOSE up -d --pull never --wait --wait-timeout 240 backend queue reverb scheduler; then
+    echo ">> DEPLOY FAILED: backend services did not become ready"
+    exit 1
+  fi
   echo ">> backend deploy done"
 else
   echo "backend: no change"
 fi
 
-if [ -n "$f_new" ] && [ "$f_run" != "$f_new" ]; then
+if [ "$f_run" != "$f_new" ]; then
   echo ">> frontend changed ${f_run:0:19} -> ${f_new:0:19}; deploying"
-  $COMPOSE up -d frontend
+  if ! $COMPOSE up -d --pull never --wait --wait-timeout 240 frontend; then
+    echo ">> DEPLOY FAILED: frontend did not become ready"
+    exit 1
+  fi
   echo ">> frontend deploy done"
 else
   echo "frontend: no change"
@@ -75,7 +86,7 @@ fi
 # any log-shipping alert see it) and the script exits 1; the next timer run
 # re-runs the gate instead of papering over a broken stack. Disable with
 # SKIP_HEALTHCHECK_GATE=1 for a known-partial deploy.
-if [ "${SKIP_HEALTHCHECK_GATE:-0}" != "1" ] && [ -f "scripts/healthcheck.sh" ]; then
+if [ "${SKIP_HEALTHCHECK_GATE:-0}" != "1" ]; then
   echo ">> running stack healthcheck gate"
   # Env assignments BEFORE the command: as arguments they would reach the
   # healthcheck's option parser and exit 2 — which would fail every deploy.
@@ -95,5 +106,4 @@ if [ "${SKIP_HEALTHCHECK_GATE:-0}" != "1" ] && [ -f "scripts/healthcheck.sh" ]; 
   echo ">> healthcheck gate passed"
 fi
 
-docker image prune -f >/dev/null 2>&1 || true
 echo "=== done ==="
