@@ -275,7 +275,7 @@ services:
         condition: service_completed_successfully
       ffmpeg:
         condition: service_healthy
-    command: php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000
+    command: php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000 --workers=${OCTANE_WORKERS:-2} --max-requests=500
     healthcheck:
       # /up is Laravel's own health route, so this proves Octane/RoadRunner is
       # actually serving HTTP, not merely that a php process exists.
@@ -580,9 +580,10 @@ services:
       - ../hive-os-frontend:/app
     environment:
       NODE_ENV: development
+      NODE_OPTIONS: "--max-old-space-size=1536"
       NEXT_PUBLIC_API_URL: http://localhost:8081/api/v1
       INTERNAL_API_URL: http://backend:8000/api/v1
-      WATCHPACK_POLLING: "true"
+      WATCHPACK_POLLING: "${WATCHPACK_POLLING:-false}"
       # 📡 REAL-TIME BROADCASTING
       NEXT_PUBLIC_REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
       NEXT_PUBLIC_REVERB_HOST: "localhost"
