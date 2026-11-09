@@ -223,7 +223,7 @@ services:
       REVERB_SCHEME: "http"
       NEXT_PUBLIC_REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
       NEXT_PUBLIC_REVERB_HOST: "localhost"
-      NEXT_PUBLIC_REVERB_PORT: "9095"
+      NEXT_PUBLIC_REVERB_PORT: "${REVERB_HOST_PORT:-19095}"
       NEXT_PUBLIC_REVERB_SCHEME: "http"
       # 🚀 TELL LARAVEL WHERE REVERB LIVES IN DOCKER
       REVERB_HOST: reverb
@@ -556,7 +556,7 @@ services:
       # 📡 REAL-TIME BROADCASTING
       NEXT_PUBLIC_REVERB_APP_KEY: "${REVERB_APP_KEY:-${REVERB_APP_KEY:-uq8zbsjhgcajsmdiwhc8}}"
       NEXT_PUBLIC_REVERB_HOST: "localhost"
-      NEXT_PUBLIC_REVERB_PORT: "9095"
+      NEXT_PUBLIC_REVERB_PORT: "${REVERB_HOST_PORT:-19095}"
       NEXT_PUBLIC_REVERB_SCHEME: "http"
       # 🚀Forces Next.js to broadcast outside the container
       HOSTNAME: "0.0.0.0"
@@ -671,7 +671,7 @@ services:
     container_name: hive-reverb
     restart: unless-stopped
     ports:
-      - "127.0.0.1:9095:9000" # Expose Reverb to your local browser
+      - "127.0.0.1:${REVERB_HOST_PORT:-19095}:9000" # Expose Reverb to your local browser (avoid Win Hyper-V 9xxx exclusions)
     volumes:
       - ../hive-os-backend:/var/www/html
       - hive-backend-storage:/var/www/html/storage
