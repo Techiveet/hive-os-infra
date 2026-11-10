@@ -233,6 +233,9 @@ services:
       PUSHER_APP_SECRET: "${REVERB_APP_SECRET:-${REVERB_APP_SECRET:-u0shs2anhgao3uikmlbq}}"
       PUSHER_PORT: "9000"
       PUSHER_SCHEME: "http"
+      HIVE_VIDEO_ENABLED: "true"
+      HIVE_VIDEO_SECRET: ${HIVE_VIDEO_SECRET:?HIVE_VIDEO_SECRET must be set}
+      HIVE_VIDEO_BACKEND_URL: http://hive-video-backend:5001
     depends_on:
       redis:
         condition: service_healthy
