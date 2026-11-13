@@ -517,7 +517,7 @@ fi
 DEPLOY_STEP="Caching Laravel config"
 compose exec -T backend php artisan config:cache
 DEPLOY_STEP="Caching Laravel views"
-compose exec -T backend mkdir -p /var/www/html/Modules/Subscription/app/resources/views || true
+compose exec -T backend sh -lc 'for d in /var/www/html/Modules/*; do if [ -d "$d" ]; then mkdir -p "$d/resources/views"; fi; done; mkdir -p /var/www/html/Modules/Subscription/app/resources/views' || true
 compose exec -T backend php artisan view:cache
 
 DEPLOY_STEP="Reloading Octane workers"

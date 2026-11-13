@@ -51,7 +51,7 @@ if [ -n "$b_new" ] && [ "$b_run" != "$b_new" ]; then
   $COMPOSE exec -T backend php artisan tenants:migrate --force
   $COMPOSE exec -T backend php artisan hive:sync-system-access --force || true
   $COMPOSE exec -T backend php artisan config:cache
-  $COMPOSE exec -T backend mkdir -p /var/www/html/Modules/Subscription/app/resources/views || true
+  $COMPOSE exec -T backend sh -lc 'for d in /var/www/html/Modules/*; do if [ -d "$d" ]; then mkdir -p "$d/resources/views"; fi; done; mkdir -p /var/www/html/Modules/Subscription/app/resources/views' || true
   $COMPOSE exec -T backend php artisan view:cache
   $COMPOSE exec -T backend php artisan octane:reload || true
   echo ">> backend deploy done"

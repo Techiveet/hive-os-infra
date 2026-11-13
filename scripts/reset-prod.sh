@@ -222,6 +222,7 @@ echo "      change it on first sign-in (must_change_password is set in productio
 echo "== Rebuild Laravel caches =="
 $COMPOSE exec -T backend php artisan optimize:clear
 $COMPOSE exec -T backend php artisan config:cache
+$COMPOSE exec -T backend sh -lc 'for d in /var/www/html/Modules/*; do if [ -d "$d" ]; then mkdir -p "$d/resources/views"; fi; done; mkdir -p /var/www/html/Modules/Subscription/app/resources/views' || true
 $COMPOSE exec -T backend php artisan view:cache
 
 $COMPOSE up -d queue reverb scheduler frontend prometheus grafana node-exporter cadvisor caddy

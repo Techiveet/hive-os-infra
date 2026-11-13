@@ -537,6 +537,8 @@ services:
         php artisan optimize:clear &&
         php artisan config:cache &&
         php artisan route:cache &&
+        for d in /var/www/html/Modules/*; do if [ -d "$$d" ]; then mkdir -p "$$d/resources/views"; fi; done &&
+        mkdir -p /var/www/html/Modules/Subscription/app/resources/views &&
         php artisan view:cache &&
         php artisan event:cache &&
         php artisan octane:start --server=roadrunner --host=0.0.0.0 --port=8000 --max-requests=500

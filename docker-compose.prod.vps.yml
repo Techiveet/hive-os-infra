@@ -649,6 +649,8 @@ services:
         php artisan optimize:clear &&
         php artisan config:cache &&
         php artisan route:cache &&
+        for d in /var/www/html/Modules/*; do if [ -d "$$d" ]; then mkdir -p "$$d/resources/views"; fi; done &&
+        mkdir -p /var/www/html/Modules/Subscription/app/resources/views &&
         php artisan view:cache &&
         php artisan event:cache &&
         (php artisan hive:deploy --force || echo "hive:deploy FAILED: databases were not migrated; serving with the current schema. See the output above.") &&
