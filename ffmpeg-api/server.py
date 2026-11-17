@@ -634,39 +634,6 @@ def convert():
         )
 
 
-@app.post("/subtitle/convert")
-def convert_subtitle():
-    """Convert a timed subtitle file to WebVTT."""
-    if "file" not in request.files:
-        return error("No file provided")
-
-    f = request.files["file"]
-    input_ext = (f.filename or "subtitle.srt").rsplit(".", 1)[-1].lower()
-    if input_ext not in {"vtt", "srt", "ass", "ssa", "sub", "sbv", "ttml", "dfxp"}:
-        return error("Unsupported subtitle format")
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, f"input.{input_ext}")
-        output_path = os.path.join(tmpdir, "output.vtt")
-        f.save(input_path)
-
-        ok, stderr = run_ffmpeg([
-            "-i", input_path,
-            "-f", "webvtt",
-            output_path,
-        ], timeout=60)
-        if not ok or not os.path.exists(output_path):
-            app.logger.warning("Subtitle conversion failed: %s", stderr[-500:])
-            return error("This subtitle could not be converted. Check that it contains valid timed captions.")
-
-        with open(output_path, "r", encoding="utf-8", errors="replace") as converted:
-            contents = converted.read()
-        if "-->" not in contents:
-            return error("This subtitle could not be converted. Check that it contains valid timed captions.")
-
-        return app.response_class(contents, mimetype="text/vtt")
-
-
 @app.post("/subtitle/extract")
 def extract_subtitles():
     """Extract all timed text streams embedded in a video as WebVTT."""

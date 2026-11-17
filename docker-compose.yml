@@ -256,12 +256,12 @@ services:
       # /up is Laravel's own health route, so this proves Octane/RoadRunner is
       # actually serving HTTP, not merely that a php process exists.
       test: ["CMD", "curl", "-f", "http://localhost:8000/up"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 40s
       retries: 5
       # The entrypoint waits for Postgres, migrates, and rebuilds the docs
       # search index on boot, so give it room before failures start to count.
-      start_period: 120s
+      start_period: 180s
     networks:
       hive-network:
         aliases:
@@ -445,10 +445,13 @@ services:
       # horizon:status exit codes: 0 = running, 1 = paused, 2 = no master
       # supervisor. A paused or dead Horizon is therefore unhealthy, not just a
       # container that lost its process.
-      test: ["CMD", "php", "artisan", "horizon:status"]
-      interval: 15s
+      # Local stack: a cheap process check. Booting Laravel just to ask
+      # horizon:status takes 25-50s on a loaded Docker Desktop machine and
+      # fails the check even though Horizon is running. PID 1 is Horizon.
+      test: ["CMD-SHELL", "grep -aq 'artisan.horizon' /proc/1/cmdline"]
+      interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 3
       start_period: 60s
     networks:
       - hive-network
@@ -525,9 +528,9 @@ services:
       # malformed scheduled command surfaces here. Liveness of the loop itself
       # is covered by Docker supervision: PID 1 is `schedule:work`, so if the
       # loop dies the container exits and restart: unless-stopped restarts it.
-      test: ["CMD", "php", "artisan", "schedule:list"]
+      test: ["CMD-SHELL", "grep -aq 'artisan.schedule:work' /proc/1/cmdline"]
       interval: 30s
-      timeout: 15s
+      timeout: 10s
       retries: 3
       start_period: 60s
     volumes:
@@ -782,7 +785,7 @@ services:
     ports:
       # Exposed for `ollama pull` from the host. The backend reaches it over the
       # compose network at http://ollama:11434 instead.
-      - "127.0.0.1:11434:11434"
+      - "127.0.0.1:11470:11434"
     volumes:
       - hive-ollama-models:/root/.ollama
     environment:

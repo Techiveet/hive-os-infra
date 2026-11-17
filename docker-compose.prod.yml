@@ -444,6 +444,8 @@ services:
       REDIS_HOST: hive-stack-redis
       REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      SCOUT_QUEUE: ${SCOUT_QUEUE:-true}
+      SCOUT_AFTER_COMMIT: ${SCOUT_AFTER_COMMIT:-true}
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       REMBG_INTERNAL_URL: ${REMBG_INTERNAL_URL:-http://rembg:5000}
       GOTENBERG_INTERNAL_URL: ${GOTENBERG_INTERNAL_URL:-http://gotenberg:3000}
@@ -527,6 +529,8 @@ services:
       REDIS_HOST: hive-stack-redis
       REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      SCOUT_QUEUE: ${SCOUT_QUEUE:-true}
+      SCOUT_AFTER_COMMIT: ${SCOUT_AFTER_COMMIT:-true}
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       FFMPEG_URL: ${FFMPEG_INTERNAL_URL:-http://ffmpeg:9090}
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
@@ -587,6 +591,8 @@ services:
       REDIS_HOST: hive-stack-redis
       REDIS_INTERNAL_HOST: hive-stack-redis
       MEILISEARCH_HOST: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
+      SCOUT_QUEUE: ${SCOUT_QUEUE:-true}
+      SCOUT_AFTER_COMMIT: ${SCOUT_AFTER_COMMIT:-true}
       MEILISEARCH_INTERNAL_URL: ${MEILISEARCH_INTERNAL_URL:-http://meilisearch:7700}
       BROADCAST_CONNECTION: ${BROADCAST_CONNECTION:-reverb}
       REVERB_APP_ID: ${REVERB_APP_ID}
