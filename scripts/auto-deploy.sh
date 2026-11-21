@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+
+# Production releases, redeploys and rollbacks share the immutable-bundle consumer.
+# This legacy entry point must never fall back to mutable tags or host builds.
+HIVE_RELEASE_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -z "${HIVE_RELEASE_COMMIT:-}" || -z "${HIVE_RELEASE_MANIFEST:-}" ]]; then
+  echo "Release rejected: HIVE_RELEASE_COMMIT and HIVE_RELEASE_MANIFEST are required; use secure_release.py." >&2
+  if ! compgen -G "$HIVE_RELEASE_SCRIPT_DIR/../releases/security/*.json" > /dev/null; then
+    echo "Cutover pending: no admitted release manifest exists under releases/security/ yet. Prepare one with 'python3 scripts/secure_release.py prepare ...', merge it to main after review, then rerun with HIVE_RELEASE_COMMIT=<reviewed main SHA> HIVE_RELEASE_MANIFEST=releases/security/<release-id>.json. Legacy mutable-tag deploys remain disabled." >&2
+  fi
+  exit 2
+fi
+exec python3 "$HIVE_RELEASE_SCRIPT_DIR/secure_release.py" --repo "$HIVE_RELEASE_SCRIPT_DIR/.." --commit "$HIVE_RELEASE_COMMIT" --manifest "$HIVE_RELEASE_MANIFEST" --apply
+exit 2
+
 # Pull-based deploy for the Hive stack.
 #
 # Why: the VPS firewall (Hetzner Cloud Firewall) blocks inbound SSH from GitHub
