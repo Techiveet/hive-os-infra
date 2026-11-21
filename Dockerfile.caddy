@@ -5,9 +5,12 @@ FROM caddy:${CADDY_VERSION}-builder AS builder
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     xcaddy build \
-      --with github.com/caddy-dns/cloudflare
+      --with github.com/caddy-dns/cloudflare \
+      --with golang.org/x/net@v0.62.0
 
 FROM caddy:${CADDY_VERSION}-alpine
+
+RUN apk update && apk upgrade --no-cache
 
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 COPY Caddyfile /etc/caddy/Caddyfile

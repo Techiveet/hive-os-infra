@@ -5,8 +5,8 @@ ARG DEBIAN_FRONTEND=noninteractive
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_ROOT_USER_ACTION=ignore
 
-# Install FFmpeg (full build with all codecs)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Install FFmpeg (full build with all codecs) and apply base OS security updates
+RUN apt-get update && apt-get upgrade -y && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
     && rm -rf /var/lib/apt/lists/*
