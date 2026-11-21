@@ -1,0 +1,123 @@
+#!/bin/sh
+# Minimal mc-compatible S3 CLI wrapper backed by Alpine aws-cli (zero Go CVEs).
+# Supports the exact operations used by seaweedfs-bootstrap and db-backup-offsite:
+#   mc --version
+#   mc alias set <alias> <url> <access_key> <secret_key>
+#   mc mb [--ignore-existing] <alias>/<bucket>
+#   mc stat <alias>/<bucket>[/<key>]
+#   mc mirror [--overwrite] <local_dir> <alias>/<bucket>[/<prefix>]
+set -eu
+
+CONF_DIR="${MC_CONFIG_DIR:-/tmp/.mc-aws}"
+mkdir -p "$CONF_DIR"
+chmod 700 "$CONF_DIR"
+
+load_alias() {
+  alias_name="$1"
+  cfg="$CONF_DIR/${alias_name}.env"
+  if [ ! -f "$cfg" ]; then
+    echo "mc: unknown alias '${alias_name}'" >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  . "$cfg"
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION="us-east-1" AWS_EC2_METADATA_DISABLED="true"
+}
+
+split_target() {
+  raw="$1"
+  ALIAS="${raw%%/*}"
+  REST="${raw#*/}"
+  if [ "$ALIAS" = "$raw" ] || [ -z "$REST" ]; then
+    echo "mc: expected <alias>/<bucket>, got '${raw}'" >&2
+    exit 1
+  fi
+  BUCKET="${REST%%/*}"
+  if [ "$BUCKET" = "$REST" ]; then
+    KEY=""
+  else
+    KEY="${REST#*/}"
+  fi
+}
+
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  --version|-v|version)
+    echo "mc-aws-compat 1.0 ($(aws --version 2>&1))"
+    exit 0
+    ;;
+  alias)
+    sub="${1:-}"
+    shift || true
+    if [ "$sub" != "set" ] || [ "$#" -lt 4 ]; then
+      echo "usage: mc alias set <alias> <url> <access_key> <secret_key>" >&2
+      exit 1
+    fi
+    alias_name="$1"
+    endpoint="$2"
+    ak="$3"
+    sk="$4"
+    umask 077
+    {
+      printf 'S3_ENDPOINT=%s\n' "$(printf "'%s'" "$(printf '%s' "$endpoint" | sed "s/'/'\\\\''/g")")"
+      printf 'AWS_ACCESS_KEY_ID=%s\n' "$(printf "'%s'" "$(printf '%s' "$ak" | sed "s/'/'\\\\''/g")")"
+      printf 'AWS_SECRET_ACCESS_KEY=%s\n' "$(printf "'%s'" "$(printf '%s' "$sk" | sed "s/'/'\\\\''/g")")"
+    } > "$CONF_DIR/${alias_name}.env"
+    load_alias "$alias_name"
+    # Verify authenticated connectivity (matches real `mc alias set` behavior)
+    aws --endpoint-url "$S3_ENDPOINT" s3api list-buckets >/dev/null
+    exit 0
+    ;;
+  mb)
+    ignore_existing=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --ignore-existing|-p) ignore_existing=1; shift ;;
+        *) break ;;
+      esac
+    done
+    split_target "${1:-}"
+    load_alias "$ALIAS"
+    if aws --endpoint-url "$S3_ENDPOINT" s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
+      if [ "$ignore_existing" = "1" ]; then
+        exit 0
+      fi
+      echo "mc: bucket '${BUCKET}' already exists" >&2
+      exit 1
+    fi
+    aws --endpoint-url "$S3_ENDPOINT" s3api create-bucket --bucket "$BUCKET" >/dev/null
+    exit 0
+    ;;
+  stat)
+    split_target "${1:-}"
+    load_alias "$ALIAS"
+    if [ -z "$KEY" ]; then
+      aws --endpoint-url "$S3_ENDPOINT" s3api head-bucket --bucket "$BUCKET" >/dev/null
+    else
+      aws --endpoint-url "$S3_ENDPOINT" s3api head-object --bucket "$BUCKET" --key "$KEY" >/dev/null
+    fi
+    exit 0
+    ;;
+  mirror)
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --overwrite|--remove) shift ;;
+        *) break ;;
+      esac
+    done
+    src="${1:-}"
+    dst="${2:-}"
+    split_target "$dst"
+    load_alias "$ALIAS"
+    s3_uri="s3://${BUCKET}"
+    [ -n "$KEY" ] && s3_uri="${s3_uri}/${KEY}"
+    aws --endpoint-url "$S3_ENDPOINT" s3 sync "$src" "$s3_uri" --only-show-errors
+    exit 0
+    ;;
+  *)
+    echo "mc: unsupported command '${cmd}'" >&2
+    exit 1
+    ;;
+esac

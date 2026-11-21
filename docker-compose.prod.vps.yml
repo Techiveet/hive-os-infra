@@ -271,6 +271,11 @@ services:
     image: chrislusf/seaweedfs:3.94
     container_name: hive-seaweedfs
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
     logging:
       driver: json-file
       options:
@@ -317,6 +322,11 @@ services:
     image: hive-seaweedfs-bootstrap:2025-08-13
     container_name: hive-seaweedfs-bootstrap
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.2'
+          memory: 128M
     logging:
       driver: json-file
       options:
@@ -560,6 +570,7 @@ services:
       - .env
     environment:
       APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-warning}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
       OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
@@ -699,6 +710,7 @@ services:
       - .env
     environment:
       APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-warning}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
       OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
@@ -796,6 +808,7 @@ services:
       - .env
     environment:
       APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-warning}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
       OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
@@ -885,6 +898,7 @@ services:
       - .env
     environment:
       APP_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-warning}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434/v1}
       OLLAMA_NUM_THREAD: ${OLLAMA_NUM_THREAD:-2}
       OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-2048}
@@ -963,6 +977,11 @@ services:
       dockerfile: Dockerfile
     image: hive-video-backend:latest
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
     logging:
       driver: json-file
       options:
@@ -1004,6 +1023,11 @@ services:
   video-media:
     image: livekit/livekit-server:v1.13.6
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:7880/"]
       interval: 30s
@@ -1279,8 +1303,8 @@ services:
     image: ghcr.io/google/cadvisor:0.60.6@sha256:b8e7d1093144fd088f425ff003d75a4aa405de075db78dae3bc563730b1bd07a
     container_name: hive-cadvisor
     restart: unless-stopped
-    mem_limit: 256m
-    memswap_limit: 384m
+    mem_limit: 384m
+    memswap_limit: 512m
     security_opt:
       - no-new-privileges:true
     command:

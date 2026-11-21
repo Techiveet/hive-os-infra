@@ -1,12 +1,11 @@
-ARG CADDY_VERSION=2
+ARG CADDY_VERSION=2.11.9
 
 FROM caddy:${CADDY_VERSION}-builder AS builder
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     xcaddy build \
-      --with github.com/caddy-dns/cloudflare \
-      --with golang.org/x/net@v0.62.0
+      --with github.com/caddy-dns/cloudflare
 
 FROM caddy:${CADDY_VERSION}-alpine
 
